@@ -134,11 +134,17 @@ if __name__ == "__main__":
     print("Local Model       : {}".format(args.model))
     print("=" * 80)
 
+    # client_modalities_dict = {
+    #     "mhealth": [10, 10, 10],
+    #     "opp": [15, 15],
+    #     "ur_fall": [10, 10, 10]
+    # }
     client_modalities_dict = {
-        "mhealth": [10, 10, 10],
-        "opp": [15, 15],
-        "ur_fall": [10, 10, 10]
+        "mhealth": [5, 5, 5],
+        "opp": [5, 5],
+        "ur_fall": [5, 5, 5]
     }
+    args.numusers = sum(client_modalities_dict[args.dataset])
 
     main(
         dataset=args.dataset,
