@@ -52,7 +52,7 @@ class FedProp(Server):
                 specific_size=rep_size,
             )
 
-            client_cf = MLP(rep_size, n_classes)
+            client_cf = MLP(rep_size*2, n_classes)
             user = UserProp(
                 i, self.clients_train_data_list[i], self.test_data, self.public_data, client_ae, client_cf,
                 client_modals, batch_size, learning_rate, beta, lamda,
@@ -67,8 +67,14 @@ class FedProp(Server):
             'align_loss': [],
             'reg_loss': []
         }
+        self.server_loss_history = {
+            'distill_loss': [],
+            'align_loss': [],
+            'cls_loss': [],
+            'total_loss': []
+        }
 
-    def _visualize_modal_distributions(self, z_shares_all):
+    def _visualize_modal_distributions(self, z_shares_all, glob_iter):
         all_feats, all_labels = [], []
         for m, clients_list in z_shares_all.items():  # 遍历模态
             for c_idx, z in enumerate(clients_list):  # 遍历客户端
@@ -86,7 +92,7 @@ class FedProp(Server):
         sns.scatterplot(x=z_emb[:, 0], y=z_emb[:, 1], hue=all_labels, palette="tab10", s=80)
         plt.title("Modal-Client Feature Distribution", fontsize=14)
         plt.tight_layout()
-        plt.savefig("results/modal_distributions.png")
+        plt.savefig(f"results/dist/modal_{self.dataset}_distributions_{glob_iter}.png")
         plt.close()
 
     def aggregate_and_train(self, z_shares_all_list):
@@ -138,7 +144,7 @@ class FedProp(Server):
 
         return z_global
 
-    def train_server(self, z_shares_all_list):
+    def train_server(self, z_shares_all_list, glob_iter):
         """
         服务端蒸馏 + 对齐 + 分类联合训练
         """
@@ -150,7 +156,10 @@ class FedProp(Server):
         for client_dict in z_shares_all_list:
             for mod, z_share in client_dict.items():
                 z_shares_all.setdefault(mod, []).append(z_share)
-
+        
+        if glob_iter % 10 == 0:
+            self._visualize_modal_distributions(z_shares_all, glob_iter)
+            
         z_modal_clients = {}
         for m, zs in z_shares_all.items():
             z_means = torch.stack(zs, dim=0)  # [num_clients_m, D_m]
@@ -183,21 +192,21 @@ class FedProp(Server):
                     z_m_pooled = z_m.mean(dim=1)  # [batch_size, feature_dim] - 平均池化
 
                     dist_loss += torch.nn.functional.mse_loss(
-                        z_m_pooled, 
+                        z_m_pooled,
                         z_modal_clients[m].unsqueeze(0).expand(self.batch_size, -1).detach()
                     )
 
                 # === Step 4. 模态间语义对齐 ===
                 z_stack = torch.stack(list(z_m_all.values()), dim=0)  # [M, B,win, rep]\
-    
+
                 z_center = z_stack.mean(dim=0)
                 for m in z_m_all.keys():
                     align_loss += torch.nn.functional.mse_loss(z_m_all[m], z_center)
-                
+
                 # === Step 5. 分类训练 ===
                 z_fuse = torch.cat([z for z in z_m_all.values()], dim=-1)
                 y_true = torch.from_numpy(labels[:, idx_start:idx_end]).to(self.device).flatten().long()
-                
+
                 logits = self.cf_model_server(z_fuse)
                 # print(logits.shape,y_true.shape)
                 cls_loss = self.cls_loss_fn(logits, y_true)
@@ -213,11 +222,16 @@ class FedProp(Server):
                 self.optimizer_cf.step()
 
             print(f"[Server Train] Distill={dist_loss:.4f} Align={align_loss:.4f} Cls={cls_loss:.4f}")
+
             z_global_center = z_center.mean(dim=0).detach()  # 跨batch平均
 
-        print(z_global_center.shape,"111")
-        return z_global_center.mean(dim=0)
+        self.server_loss_history['distill_loss'].append(dist_loss.item())
+        self.server_loss_history['align_loss'].append(align_loss.item())
+        self.server_loss_history['cls_loss'].append(cls_loss.item())
+        self.server_loss_history['total_loss'].append(total_loss.item())
 
+        print(z_global_center.shape, "111")
+        return z_global_center.mean(dim=0)
 
     def train(self):
         for glob_iter in range(self.num_glob_iters):
@@ -236,7 +250,7 @@ class FedProp(Server):
 
             # Step 2: 服务器聚合 + 伪标签增强训练
             # z_global = self.aggregate_and_train(z_shares_all)
-            z_global = self.train_server(z_shares_all)
+            z_global = self.train_server(z_shares_all, glob_iter)
 
             # Step 3: 客户端更新 AE
             epoch_losses_clients = {'rec_loss': [], 'orth_loss': [], 'align_loss': [], 'reg_loss': []}
@@ -272,20 +286,30 @@ class FedProp(Server):
     def plot_losses(self, save_dir):
         os.makedirs(save_dir, exist_ok=True)
 
-        loss_names = list(self.loss_history.keys())
-        num_losses = len(loss_names)
-
-        fig, axes = plt.subplots(2, 2, figsize=(12, 8))  # 四个子图
+        # ---- 客户端损失 ----
+        fig, axes = plt.subplots(2, 2, figsize=(12, 8))
         axes = axes.flatten()
-
-        for i, k in enumerate(loss_names):
+        for i, k in enumerate(self.loss_history.keys()):
             axes[i].plot(range(1, len(self.loss_history[k]) + 1), self.loss_history[k], marker='o')
             axes[i].set_xlabel("Global Round")
             axes[i].set_ylabel("Loss")
-            axes[i].set_title(f"{k} over rounds")
+            axes[i].set_title(f"Client {k}")
             axes[i].grid(True)
-
         plt.tight_layout()
-        plt.savefig(os.path.join(save_dir, "client_ae_losses_subplots.png"))
+        plt.savefig(os.path.join(save_dir, "client_losses.png"))
         plt.close()
-        print(f"[INFO] AE loss subplots saved to {save_dir}")
+
+        # ---- 服务端损失 ----
+        fig, ax = plt.subplots(figsize=(8, 6))
+        for k, v in self.server_loss_history.items():
+            ax.plot(range(1, len(v) + 1), v, label=k, marker='o')
+        ax.set_xlabel("Global Round")
+        ax.set_ylabel("Loss")
+        ax.set_title("Server Training Losses")
+        ax.legend()
+        ax.grid(True)
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, "server_losses.png"))
+        plt.close()
+
+        print(f"[INFO] AE + Server losses saved to {save_dir}")

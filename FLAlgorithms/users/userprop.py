@@ -11,6 +11,7 @@ from FLAlgorithms.users.userbase import User
 from utils.model_utils import *
 
 
+
 class UserProp(User):
     def __init__(self, client_id, train_data, test_data, public_data, ae_model, cf_model,
                  modalities, batch_size=32, learning_rate=1e-3,
@@ -52,9 +53,8 @@ class UserProp(User):
             z_all_windows = torch.cat(temp_z_windows[m], dim=0)  # [batch*num_windows, D]
             z_mean = z_all_windows.mean(dim=0)  # [D]
             z_shares_dict[m] = z_mean
- 
-        return z_shares_dict
 
+        return z_shares_dict
 
     def train_ae_prop(self, global_share, pre_w):
         """
@@ -145,7 +145,6 @@ class UserProp(User):
         # ✅ 返回“模态-特征字典”和“损失字典”
         return z_shares_all, loss_dict_avg
 
-
     def train_cf_prop(self):
         self.freeze(self.ae_model)  # AE 不更新
         self.cf_model.train()
@@ -169,8 +168,9 @@ class UserProp(User):
             # 每个模态编码
             for m in self.modalities:
                 x_m = torch.from_numpy(X_modal[m][:, idx_start:idx_end, :]).to(self.device)
-                _, z_spec, out = self.ae_model.encode(x_m, m)
-                latents.append(z_spec)
+                z_share, z_spec, out = self.ae_model.encode(x_m, m)
+                z_latent = torch.cat([z_share, z_spec], dim=-1)
+                latents.append(z_latent)
 
             # 拼接模态特征
             latent_cat = torch.cat(latents, dim=1)
