@@ -29,6 +29,10 @@ class FedProp(Server):
 
         self.attn_temperature = 1.0  # 可调
         self.attn_w = nn.Parameter(torch.randn(rep_size, 1).to(self.device) * 0.1).to(self.device)
+        self.proj_heads = nn.ModuleDict({
+            m: nn.Sequential(nn.Linear(rep_size, rep_size), nn.ReLU(), nn.Linear(rep_size, rep_size))
+            for m in self.modalities_server
+        }).to(self.device)
         nn.init.xavier_uniform_(self.attn_w)
 
         for i in range(self.total_users):
@@ -57,9 +61,13 @@ class FedProp(Server):
                 i, self.clients_train_data_list[i], self.test_data, self.public_data, client_ae, client_cf,
                 client_modals, batch_size, learning_rate, beta, lamda,
                 local_epochs, label_ratio=label_ratio)
+
+            user.info()
+
             print("client", i, "modals:", client_modals)
             self.users.append(user)
 
+        # exit()
         # 用于记录每轮各客户端损失
         self.loss_history = {
             'rec_loss': [],
@@ -71,7 +79,8 @@ class FedProp(Server):
             'distill_loss': [],
             'align_loss': [],
             'cls_loss': [],
-            'total_loss': []
+            'total_loss': [],
+            'proto_loss': []
         }
 
     def _visualize_modal_distributions(self, z_shares_all, glob_iter):
@@ -95,75 +104,101 @@ class FedProp(Server):
         plt.savefig(f"results/dist/modal_{self.dataset}_distributions_{glob_iter}.png")
         plt.close()
 
-    def aggregate_and_train(self, z_shares_all_list):
+    def _visualize_local_prototypes_3d(self, prototypes_weights, glob_iter):
         """
-        z_shares_all_list: list, 每个元素是客户端返回的 {mod: [特征]} 字典
+        3D 可视化每个客户端的 prototype 分布。
+        每个点 = 某客户端的某一类原型
+        颜色 = 类别
+        标记形状 = 客户端
         """
-        self.cf_model_server.train()
-        self.ae_model_server.train()
+        all_feats, all_labels, all_clients = [], [], []
 
-        z_shares_all = {}  # dict: mod -> list of according client z_share
-        for client_dict in z_shares_all_list:
-            for mod, z_share in client_dict.items():
-                if mod not in z_shares_all:
-                    z_shares_all[mod] = []
-                z_shares_all[mod].append(z_share)
-        # 可视化
-        # self._visualize_modal_distributions(z_shares_all)
-        # exit()
+        for client_idx, (proto_dict, _) in enumerate(prototypes_weights):
+            for cls, proto in proto_dict.items():
+                z_np = proto.detach().cpu().numpy().reshape(-1)
+                all_feats.append(z_np)
+                all_labels.append(int(cls))
+                all_clients.append(client_idx)
 
-        # Step 1: 模态内FedAvg
-        z_modal_global = []
-        for m in z_shares_all.keys():
-            z_means = torch.stack([z for z in z_shares_all[m]], dim=0)  # [num_clients_m, D_m]
-            z_global_m = z_means.mean(dim=0)  # FedAvg
-            z_modal_global.append(z_global_m)
-        z_modal_global = torch.stack(z_modal_global, dim=0)  # [num_modal, D]
+        all_feats = np.stack(all_feats)
 
-        # Step 2: 模态间注意力聚合
-        attn_scores = torch.softmax(z_modal_global @ self.attn_w.to(self.device), dim=0)  # [num_modal, 1]
-        z_global = (attn_scores * z_modal_global).sum(dim=0)  # [D]
+        # === t-SNE 降维到3D ===
+        tsne = TSNE(n_components=3, perplexity=5, random_state=42)
+        z_emb = tsne.fit_transform(all_feats)
 
-        # Step 3: 特征增强
-        z_all = torch.cat([torch.cat(z_list, dim=0) for z_list in z_shares_all.values()], dim=0)
-        z_aug = torch.cat([z_all, z_global.unsqueeze(0).repeat(z_all.size(0), 1)], dim=1)
+        # === 绘制3D图 ===
+        fig = plt.figure(figsize=(8, 6))
+        ax = fig.add_subplot(111, projection="3d")
 
-        # Step 4: 伪标签生成与增强训练
-        pseudo_logits = self.cf_model_server(z_aug.clone().detach())
-        pseudo_y = pseudo_logits.argmax(dim=1)
+        num_classes = len(np.unique(all_labels))
+        palette = sns.color_palette("tab10", num_classes)
+        markers = ["o", "s", "^", "D", "P", "X", "*", "v", "<", ">"]
 
-        self.optimizer_cf.zero_grad()
-        logits_pred = self.cf_model_server(z_aug)
-        pseudo_loss = self.cls_loss_fn(logits_pred, pseudo_y)
-        pseudo_loss.backward()
-        self.optimizer_cf.step()
-        print(f"[Server Enhance] Pseudo loss={pseudo_loss.item():.4f}")
+        for i in range(len(z_emb)):
+            c = all_labels[i]
+            client = all_clients[i]
+            ax.scatter(
+                z_emb[i, 0], z_emb[i, 1], z_emb[i, 2],
+                color=palette[c % num_classes],
+                marker=markers[client % len(markers)],
+                s=80, edgecolor="k", linewidth=0.3,
+            )
 
-        # Step 5: 有监督训练
-        self.train_classifier()
-
-        return z_global
-
-    def train_server(self, z_shares_all_list, glob_iter):
+        ax.set_title(f"3D Prototype Distribution (Iter {glob_iter})", fontsize=13)
+        ax.set_xlabel("TSNE-1")
+        ax.set_ylabel("TSNE-2")
+        ax.set_zlabel("TSNE-3")
+        plt.tight_layout()
+        plt.savefig(f"results/dist/prototypes3D_{self.dataset}_{glob_iter}.png", dpi=300)
+        plt.close()
+    
+    def train_server(self, z_shares_all_list, prototypes_weights, glob_iter):
         """
         服务端蒸馏 + 对齐 + 分类联合训练
         """
         self.cf_model_server.train()
         self.ae_model_server.train()
 
+        # =========================================================================================
         # === Step 1. 聚合同模态客户端特征 ===
+        
+        # z_shares
         z_shares_all = {}
         for client_dict in z_shares_all_list:
             for mod, z_share in client_dict.items():
                 z_shares_all.setdefault(mod, []).append(z_share)
-        
+
         if glob_iter % 10 == 0:
-            self._visualize_modal_distributions(z_shares_all, glob_iter)
-            
+            pass
+            self._visualize_local_prototypes_3d(prototypes_weights, glob_iter)
+            # self._visualize_modal_distributions(z_shares_all, glob_iter)
+
         z_modal_clients = {}
         for m, zs in z_shares_all.items():
-            z_means = torch.stack(zs, dim=0)  # [num_clients_m, D_m]
+            z_means = torch.stack(zs, dim=0)  # [num_clients_m, B, D_m]
             z_modal_clients[m] = z_means.mean(dim=0).to(self.device)  # FedAvg
+            
+        # prototypes
+        total_counts = {}
+        for _, weight_dict in prototypes_weights:
+            for cls, count in weight_dict.items():
+                total_counts[cls] = total_counts.get(cls, 0) + count
+
+        # 初始化全局原型容器
+        global_prototypes = {}
+
+        for proto_dict, weight_dict in prototypes_weights:
+            for cls, proto in proto_dict.items():
+                if cls not in total_counts or total_counts[cls] == 0:
+                    continue
+                weight = weight_dict[cls] / total_counts[cls]
+                if cls not in global_prototypes:
+                    global_prototypes[cls] = proto * weight
+                else:
+                    global_prototypes[cls] += proto * weight
+                    
+    
+        # =========================================================================================
 
         # === Step 2. 使用服务端数据进行训练 ===
         modalities_seq, labels = make_seq_batch2(self.server_train_data, self.batch_size)
@@ -180,28 +215,56 @@ class FedProp(Server):
                 self.optimizer_cf.zero_grad()
 
                 z_m_all = {}
-                dist_loss, align_loss, cls_loss = 0.0, 0.0, 0.0
+                dist_loss, align_loss, cls_loss, proto_loss = 0.0, 0.0, 0.0, 0.0
 
                 # === Step 3. 计算每个模态的server特征 & 蒸馏 ===
                 for m in self.modalities_server:
                     x_m = torch.from_numpy(modalities_seq[m][:, idx_start:idx_end, :]).float().to(self.device)
                     _, z_m = self.ae_model_server.encode(x_m, m)
                     z_m_all[m] = z_m
-
-                    # 对服务器序列特征进行池化，变成静态特征
                     z_m_pooled = z_m.mean(dim=1)  # [batch_size, feature_dim] - 平均池化
 
-                    dist_loss += torch.nn.functional.mse_loss(
-                        z_m_pooled,
-                        z_modal_clients[m].unsqueeze(0).expand(self.batch_size, -1).detach()
-                    )
+                    # 2. COSINE
+                    print(z_m_pooled.shape, z_modal_clients[m].shape)
+                    z_m_pooled_norm = F.normalize(z_m_pooled, dim=-1)
+                    z_client_norm = F.normalize(z_modal_clients[m], dim=-1)
+
+                    dist_loss += 1 - torch.mean(torch.sum(z_m_pooled_norm * z_client_norm, dim=-1))
+
+                    # 3. mmd
+                    # def mmd_loss(x, y):
+                    #     xx, yy, xy = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
+                    #     rx = xx.diag().unsqueeze(0).expand_as(xx)
+                    #     ry = yy.diag().unsqueeze(0).expand_as(yy)
+                    #     Kxx = torch.exp(-0.5 * (rx.t() + rx - 2*xx))
+                    #     Kyy = torch.exp(-0.5 * (ry.t() + ry - 2*yy))
+                    #     Kxy = torch.exp(-0.5 * (rx.t() + ry - 2*xy))
+                    #     return Kxx.mean() + Kyy.mean() - 2*Kxy.mean()
+
+                    # dist_loss += mmd_loss(z_m_pooled, z_modal_clients[m])
+
+                    # 4.constra
+                    # Normalize
+                    # z_s = F.normalize(z_m_pooled, dim=-1)
+                    # z_c = F.normalize(z_modal_clients[m], dim=-1)
+
+                    # # 相似度矩阵
+                    # sim = torch.matmul(z_s, z_c.T) / tau   # [B, B]
+                    # labels = torch.arange(B).to(sim.device)
+                    # loss_contrast = F.cross_entropy(sim, labels)
+                    # dist_loss += loss_contrast
 
                 # === Step 4. 模态间语义对齐 ===
-                z_stack = torch.stack(list(z_m_all.values()), dim=0)  # [M, B,win, rep]\
+                # z_stack = torch.stack(list(z_m_all.values()), dim=0)  # [M, B,win, rep]\
 
-                z_center = z_stack.mean(dim=0)
-                for m in z_m_all.keys():
-                    align_loss += torch.nn.functional.mse_loss(z_m_all[m], z_center)
+                # z_center = z_stack.mean(dim=0)
+                # for m in z_m_all.keys():
+                #     align_loss += torch.nn.functional.mse_loss(z_m_all[m], z_center)
+
+                # 对齐
+                z_proj = [self.proj_heads[m](z_m_all[m]) for m in z_m_all.keys()]
+                z_center = torch.stack(z_proj).mean(dim=0)
+                align_loss = sum(F.mse_loss(z_proj[i], z_center) for i in range(len(z_proj)))
 
                 # === Step 5. 分类训练 ===
                 z_fuse = torch.cat([z for z in z_m_all.values()], dim=-1)
@@ -211,12 +274,30 @@ class FedProp(Server):
                 # print(logits.shape,y_true.shape)
                 cls_loss = self.cls_loss_fn(logits, y_true)
 
+                    
+                for cls_id in y_true.unique():
+                    cls_mask = (y_true == cls_id)
+                    if cls_mask.sum() > 0:
+                        logits_cls = logits[cls_mask].mean(dim=0)
+                        # 累加到全局平均表
+                        if not hasattr(self, "logits_bank"):
+                            self.logits_bank = {}
+                        if cls_id.item() not in self.logits_bank:
+                            self.logits_bank[cls_id.item()] = logits_cls.clone().detach()
+                        else:
+                            self.logits_bank[cls_id.item()] = (
+                                0.5 * self.logits_bank[cls_id.item()] + 0.5 * logits_cls.clone().detach()
+                            )
+                
+
                 # === Step 6. 总损失 ===
                 total_loss = (
                     0.1 * dist_loss +
                     0.1 * align_loss +
-                    1 * cls_loss
+                    1.0 * cls_loss +
+                    0.05 * proto_loss  #
                 )
+            
                 total_loss.backward()
                 self.optimizer_ae.step()
                 self.optimizer_cf.step()
@@ -229,9 +310,10 @@ class FedProp(Server):
         self.server_loss_history['align_loss'].append(align_loss.item())
         self.server_loss_history['cls_loss'].append(cls_loss.item())
         self.server_loss_history['total_loss'].append(total_loss.item())
+        # self.server_loss_history['proto_loss'].append(proto_loss.item())
 
         print(z_global_center.shape, "111")
-        return z_global_center.mean(dim=0)
+        return z_global_center.mean(dim=0), global_prototypes, self.logits_bank
 
     def train(self):
         for glob_iter in range(self.num_glob_iters):
@@ -239,77 +321,148 @@ class FedProp(Server):
 
             # Step 1: 客户端提取 z_share
             self.selected_users = self.select_users(glob_iter, self.num_users)
+            z_shares_all = [user.upload_shares() for user in self.selected_users]
+            prototypes_weights = [ (user.upload_prototype(), user.get_prototype_weight()) for user in self.selected_users]
 
-            # 现在改为字典形式存储所有模态
+            # Step 2: 服务器训练
+            z_global, global_prototypes, server_logits = self.train_server(z_shares_all, prototypes_weights, glob_iter)
 
-            z_shares_all = []
-            for user in self.selected_users:
-                # 每个客户端返回的是 { mod1: [z_share1, z_share2, ...], mod2:.. }
-                z_shares_client = user.upload_shares()
-                z_shares_all.append(z_shares_client)
-
-            # Step 2: 服务器聚合 + 伪标签增强训练
-            # z_global = self.aggregate_and_train(z_shares_all)
-            z_global = self.train_server(z_shares_all, glob_iter)
-
-            # Step 3: 客户端更新 AE
+            # Step 3: 客户端 AE 训练
             epoch_losses_clients = {'rec_loss': [], 'orth_loss': [], 'align_loss': [], 'reg_loss': []}
+            cf_losses_clients = {'cf_loss': [], 'cf_acc': []}
+
             for user in self.selected_users:
                 pre_w = [p.clone().detach().cpu() for p in user.ae_model.parameters()]
-                z_shares_new, loss_dict = user.train_ae_prop(z_global, pre_w)
-                print(f"[Client {user.client_id}] Recon={loss_dict['rec_loss']:.4f}")
+                z_shares_new, loss_dict = user.train_ae_prop(z_global, global_prototypes, pre_w)
+                print(f"[Client {user.client_id}] AE => Recon={loss_dict['rec_loss']:.4f}")
 
-                # 累加各客户端本轮损失
+                # 初始化客户端损失字典（若不存在）
+                if not hasattr(user, 'loss_history'):
+                    user.loss_history = {k: [] for k in ['rec_loss', 'orth_loss', 'align_loss', 'reg_loss']}
+                if not hasattr(user, 'cf_loss_history'):
+                    user.cf_loss_history = {k: [] for k in ['cf_loss', 'cf_acc']}
+
+                # 记录单客户端 AE 损失
                 for k in epoch_losses_clients.keys():
-                    epoch_losses_clients[k].append(loss_dict[k])
+                    user.loss_history[k].append(loss_dict[k])
+                    epoch_losses_clients[k].append(loss_dict[k])  # 记录到全局
 
-            # Step 4: 记录平均损失
-            for k in self.loss_history.keys():
-                avg_loss = np.mean(epoch_losses_clients[k])
-                self.loss_history[k].append(avg_loss)
+            # Step 4: 客户端 CF 训练
+            for user in self.selected_users:
+                cf_loss_dict = user.train_cf_prop(server_logits)
+                print(f"[Client {user.client_id}] CF => Loss={cf_loss_dict['cf_loss']:.4f}, Acc={cf_loss_dict['cf_acc']:.4f}")
 
-            # Step 5: 客户端分类器训练
-            for user in self.users:
-                user.train_cf_prop()
+                # 记录单客户端 CF 损失
+                for k in cf_losses_clients.keys():
+                    user.cf_loss_history[k].append(cf_loss_dict[k])
+                    cf_losses_clients[k].append(cf_loss_dict[k])  # 记录到全局
 
-            # Step 6: 服务端测试
+            # Step 5: 记录平均 AE/CF 损失
+            for k in epoch_losses_clients.keys():
+                self.loss_history.setdefault(k, []).append(np.mean(epoch_losses_clients[k]))
+            for k in cf_losses_clients.keys():
+                self.loss_history.setdefault(k, []).append(np.mean(cf_losses_clients[k]))
+
+            # Step 6: 测试
             loss, acc, f1 = self.test_server()
             self.rs_train_loss.append(loss)
             self.rs_glob_acc.append(acc)
             self.rs_glob_f1.append(f1)
 
-        # Step 7: 绘图与保存
+        # Step 7: 可视化 + 保存
         self.plot_losses(save_dir=f"./results/{self.dataset}/")
+        self.plot_client_losses(save_dir=f"./results/{self.dataset}/")
         self.test_clients()
         self.save_results()
 
     def plot_losses(self, save_dir):
         os.makedirs(save_dir, exist_ok=True)
 
-        # ---- 客户端损失 ----
-        fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+        # ---- 客户端平均损失 ----
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10))  # 调整为2x3布局
         axes = axes.flatten()
-        for i, k in enumerate(self.loss_history.keys()):
-            axes[i].plot(range(1, len(self.loss_history[k]) + 1), self.loss_history[k], marker='o')
-            axes[i].set_xlabel("Global Round")
-            axes[i].set_ylabel("Loss")
-            axes[i].set_title(f"Client {k}")
-            axes[i].grid(True)
+
+        loss_keys = ['rec_loss', 'orth_loss', 'align_loss', 'reg_loss', 'cf_loss', 'cf_acc']
+        titles = ['Reconstruction Loss', 'Orthogonal Loss', 'Alignment Loss',
+                  'Regularization Loss', 'Classification Loss', 'Classification Accuracy']
+
+        for i, (k, title) in enumerate(zip(loss_keys, titles)):
+            if k in self.loss_history and self.loss_history[k]:
+                axes[i].plot(range(1, len(self.loss_history[k]) + 1), self.loss_history[k], marker='o', linewidth=2)
+                axes[i].set_xlabel("Global Round")
+                axes[i].set_ylabel("Loss" if k != 'cf_acc' else "Accuracy")
+                axes[i].set_title(f"Average {title}")
+                axes[i].grid(True, alpha=0.3)
+
         plt.tight_layout()
-        plt.savefig(os.path.join(save_dir, "client_losses.png"))
+        plt.savefig(os.path.join(save_dir, "client_avg_losses.png"), dpi=300, bbox_inches='tight')
         plt.close()
 
         # ---- 服务端损失 ----
         fig, ax = plt.subplots(figsize=(8, 6))
         for k, v in self.server_loss_history.items():
-            ax.plot(range(1, len(v) + 1), v, label=k, marker='o')
+            ax.plot(range(1, len(v) + 1), v, label=k, marker='o', linewidth=2)
         ax.set_xlabel("Global Round")
         ax.set_ylabel("Loss")
         ax.set_title("Server Training Losses")
         ax.legend()
-        ax.grid(True)
+        ax.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig(os.path.join(save_dir, "server_losses.png"))
+        plt.savefig(os.path.join(save_dir, "server_losses.png"), dpi=300, bbox_inches='tight')
         plt.close()
 
         print(f"[INFO] AE + Server losses saved to {save_dir}")
+
+    def plot_client_losses(self, save_dir):
+        """绘制每个客户端的详细损失曲线"""
+        client_save_dir = os.path.join(save_dir, "clients")
+        os.makedirs(client_save_dir, exist_ok=True)
+
+        for user in self.users:
+            if hasattr(user, 'loss_history') and hasattr(user, 'cf_loss_history'):
+                # AE损失图
+                fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+                axes = axes.flatten()
+
+                ae_loss_keys = ['rec_loss', 'orth_loss', 'align_loss', 'reg_loss']
+                ae_titles = ['Reconstruction', 'Orthogonal', 'Alignment', 'Regularization']
+
+                for i, (k, title) in enumerate(zip(ae_loss_keys, ae_titles)):
+                    if k in user.loss_history and user.loss_history[k]:
+                        axes[i].plot(range(1, len(user.loss_history[k]) + 1),
+                                     user.loss_history[k], marker='o', linewidth=2, color='blue')
+                        axes[i].set_xlabel("Global Round")
+                        axes[i].set_ylabel("Loss")
+                        axes[i].set_title(f"Client {user.client_id} - {title} Loss")
+                        axes[i].grid(True, alpha=0.3)
+
+                plt.tight_layout()
+                plt.savefig(os.path.join(client_save_dir, f"client_{user.client_id}_ae_losses.png"),
+                            dpi=300, bbox_inches='tight')
+                plt.close()
+
+                # 分类损失图
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+                if 'cf_loss' in user.cf_loss_history and user.cf_loss_history['cf_loss']:
+                    ax1.plot(range(1, len(user.cf_loss_history['cf_loss']) + 1),
+                             user.cf_loss_history['cf_loss'], marker='o', linewidth=2, color='red')
+                    ax1.set_xlabel("Global Round")
+                    ax1.set_ylabel("Loss")
+                    ax1.set_title(f"Client {user.client_id} - Classification Loss")
+                    ax1.grid(True, alpha=0.3)
+
+                if 'cf_acc' in user.cf_loss_history and user.cf_loss_history['cf_acc']:
+                    ax2.plot(range(1, len(user.cf_loss_history['cf_acc']) + 1),
+                             user.cf_loss_history['cf_acc'], marker='o', linewidth=2, color='green')
+                    ax2.set_xlabel("Global Round")
+                    ax2.set_ylabel("Accuracy")
+                    ax2.set_title(f"Client {user.client_id} - Classification Accuracy")
+                    ax2.grid(True, alpha=0.3)
+
+                plt.tight_layout()
+                plt.savefig(os.path.join(client_save_dir, f"client_{user.client_id}_cf_losses.png"),
+                            dpi=300, bbox_inches='tight')
+                plt.close()
+
+        print(f"[INFO] Individual client losses saved to {client_save_dir}")

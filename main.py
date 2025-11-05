@@ -16,6 +16,7 @@ from FLAlgorithms.servers import *
 import torch
 torch.manual_seed(0)
 np.random.seed(42)
+EVAL_WIN = 100
 
 def main(dataset, algorithm, model, batch_size, learning_rate, num_glob_iters,
          local_epochs, optimizer, num_users, client_modalities_dict, times): \

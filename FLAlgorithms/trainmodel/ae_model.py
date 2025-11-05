@@ -127,13 +127,27 @@ class DisentangledLSTMAutoEncoder(nn.Module):
         nn.init.orthogonal_(self.fc_spec.weight)
 
     def encode(self, x, modality=None):
-        # x.shape: (batch_size, seq_len, input_size)
-        
+        _, out = self.encoder(x)
+        z_share = self.fc_share(out)
+        z_spec = self.fc_spec(out)
+        return z_share, z_spec, out
+
+    def encode_recon(self, x, modality=None):
         _, out = self.encoder(x)
         h_last = out[:, -1, :]  # 取最后时间步的隐藏状态
         z_share = self.fc_share(h_last)
         z_spec = self.fc_spec(h_last)
         return z_share, z_spec, out
+        
+        
+    # def encode(self, x, modality=None):
+    #     # x.shape: (batch_size, seq_len, input_size)
+
+    #     _, out = self.encoder(x)
+    #     h_last = out[:, -1, :]  # 取最后时间步的隐藏状态
+    #     z_share = self.fc_share(h_last)
+    #     z_spec = self.fc_spec(h_last)
+    #     return z_share, z_spec, out
 
     def decode(self, z_spec, seq_len):
         z_seq = z_spec.unsqueeze(1).expand(-1, seq_len, -1)
@@ -141,7 +155,7 @@ class DisentangledLSTMAutoEncoder(nn.Module):
         return x_recon
 
     def forward(self, x, modality=None):
-        z_share, z_spec, out = self.encode(x)
+        z_share, z_spec, out = self.encode_recon(x)
         seq_len = x.shape[1]
         x_recon = self.decode(z_spec, seq_len)
         return x_recon, z_share, z_spec
@@ -163,5 +177,3 @@ class MLP(nn.Module):
         out = self.fc(x)
         out = out.contiguous().view(-1, self.n_classes)
         return F.log_softmax(out, dim=1)
-
-

@@ -464,3 +464,36 @@ def read_user_data(index, data, dataset):
     train_data = [(x, y) for x, y in zip(X_train, y_train)]
     test_data = [(x, y) for x, y in zip(X_test, y_test)]
     return id, train_data, test_data
+
+
+def print_dataset_info(dataset, name="Dataset"):
+    """
+    通用数据集信息打印函数。
+    参数：
+        dataset: dict，包含各模态数据和标签，如 {"A": array, "B": array, "y": array}
+        name: str，可选，数据集名称（如 "Client 0"）
+    """
+    print(f"\n=== {name} ===")
+
+    # 检查标签
+    if "y" not in dataset:
+        print("Warning: dataset does not contain key 'y'.")
+        return
+
+    # 各模态信息
+    modalities = [k for k in dataset.keys() if k != "y"]
+    print(f"Modalities: {modalities}")
+    print(f"Total samples: {len(dataset['y'])}")
+
+    # 各模态形状
+    for m in modalities:
+        print(f"  └─ {m}: shape {dataset[m].shape}")
+
+    # 标签分布统计
+    y_all = dataset["y"]
+    unique_labels, counts = np.unique(y_all, return_counts=True)
+    print("\nLabel distribution:")
+    for l, c in zip(unique_labels, counts):
+        print(f"  Class {l}: {c} samples ({c / len(y_all) * 100:.2f}%)")
+
+    print("=" * 50)

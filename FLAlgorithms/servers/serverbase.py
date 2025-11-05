@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from utils.model_utils import *
 from FLAlgorithms.trainmodel.ae_model import SplitLSTMAutoEncoder, MLP
 import matplotlib.pyplot as plt
-
+from FLAlgorithms.config import EVAL_WIN
 
 class Server:
     def __init__(self, dataset, algorithm, input_sizes, rep_size, n_classes,
@@ -61,7 +61,12 @@ class Server:
         print("actual public data samples:", len(self.public_data['y']))
         for idx, data in enumerate(self.clients_train_data_list):
             print("client:", idx, ";samples:", len(data['y']))
-
+        print_dataset_info(self.server_train_data, name="Server Train")
+        print_dataset_info(self.clients_train_data, name="Clients Train")
+        print_dataset_info(self.public_data, name="Public")
+        print_dataset_info(self.test_data, name="Test")
+    
+    
         # user逻辑须在子类里
 
     def train_ae_public(self, seq_len=100):
@@ -441,7 +446,7 @@ class Server:
         self.cf_model_server.eval()
 
         total_loss, total_correct, total_samples = 0.0, 0, 0
-        eval_win = 2000
+        eval_win = EVAL_WIN
         # 添加F1 Score计算所需的变量
         all_preds = []
         all_labels = []

@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader, TensorDataset
 import copy
 import numpy as np
 from utils.model_utils import *
-
+from FLAlgorithms.config import EVAL_WIN
 
 class User:
     def __init__(self, client_id, train_data, test_data, public_data,
@@ -55,6 +55,19 @@ class User:
         # )
         self.optimizer_ae = torch.optim.Adam(self.ae_model.parameters(), lr=self.learning_rate)
         self.optimizer_cf = torch.optim.Adam(self.cf_model.parameters(), lr=self.learning_rate)
+
+    def info(self):
+        print(f"\n=== Client {self.client_id} ===")
+        print(f"Modalities: {self.modalities}")
+        print(f"Labeled samples: {len(self.labeled_data['y'])}")
+        print(f"Unlabeled samples: {len(self.unlabeled_data['y'])}")
+        print(f"Total train samples: {len(self.train_data['y'])}")
+
+        # 分别打印三个部分的分布
+        print_dataset_info(self.train_data, name=f"Client {self.client_id} - Train Data")
+        print_dataset_info(self.labeled_data, name=f"Client {self.client_id} - Labeled Subset")
+        print_dataset_info(self.unlabeled_data, name=f"Client {self.client_id} - Unlabeled Subset")
+        
 
     def freeze(self, sub_model):
         """Freeze the parameters of a model"""
@@ -149,19 +162,19 @@ class User:
             # 取每个模态的 latent
             for m in self.modalities:
                 x_m = torch.from_numpy(X_modal[m][:, idx_start:idx_end, :]).to(self.device)
-                latents.append(self.ae_model.encode(x_m, m)[1][:, -1, :])
+                latents.append(self.ae_model.encode(x_m, m)[1])
 
             latent_cat = torch.cat(latents, dim=1)
-            y_batch = torch.from_numpy(y_seq[:, idx_start:idx_end]).to(self.device).long()
+            y_batch = torch.from_numpy(y_seq[:, idx_start:idx_end]).to(self.device).reshape(-1).long()
 
             logits = self.cf_model(latent_cat)
-            loss = self.cls_loss_fn(logits, y_batch[:, 0])
+            loss = self.cls_loss_fn(logits, y_batch)
 
             loss.backward()
             self.optimizer_cf.step()
 
             total_loss += loss.item()
-            total_correct += (torch.argmax(logits, dim=1) == y_batch[:, 0]).sum().item()
+            total_correct += (torch.argmax(logits, dim=1) == y_batch).sum().item()
             total_samples += y_batch.size(0)
 
         acc = total_correct / total_samples if total_samples > 0 else 0.0
@@ -236,7 +249,7 @@ class User:
         return total_loss / iters, total_rec / iters, total_cls / iters, acc
 
 
-    def test(self, eval_win=2000):
+    def test(self, eval_win=EVAL_WIN):
         self.ae_model.eval()
         self.cf_model.eval()
         total_loss, total_correct, total_samples = 0.0, 0, 0
@@ -259,6 +272,8 @@ class User:
 
                 # ------- classifier -------
                 outputs = self.cf_model(reps)
+                # print(outputs.shape, batch_y.shape)
+                exit()
                 loss = self.cls_loss_fn(outputs, batch_y)
 
                 total_loss += loss.item() * batch_y.size(0)
