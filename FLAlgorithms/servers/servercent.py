@@ -38,19 +38,13 @@ class FedCent(Server):
 
             input_size = list(input_sizes_client.values())[0]
             # 实例化该客户端的 AE
-            # client_ae = SplitLSTMAutoEncoder(
-            #     input_sizes=input_sizes_client,
-            #     representation_size=rep_size
-            # )
-            client_ae = DisentangledLSTMAutoEncoder(
-                input_size=input_size,
-                representation_size=rep_size,
-                shared_size=rep_size,
-                specific_size=rep_size,
+            client_ae = SplitLSTMAutoEncoder(
+                input_sizes=input_sizes_client,
+                representation_size=rep_size
             )
 
             client_cf = MLP(rep_size, n_classes)
-            user = UserProp(
+            user = User(
                 i, self.clients_train_data_list[i], self.test_data, self.public_data, client_ae, client_cf,
                 client_modals, batch_size, learning_rate, beta, lamda,
                 local_epochs, label_ratio=label_ratio)
@@ -66,6 +60,13 @@ class FedCent(Server):
             self.rs_train_loss.append(loss)
             self.rs_glob_acc.append(acc)
             self.rs_glob_f1.append(f1)
+            
+            for user in self.users:
+                user.train_ae()
+                user.train_cf()
+            
         print("Test F1: ", self.rs_glob_f1)
         print("Test accuracy: ", self.rs_glob_acc)
+        accs = self.test_clients()
+        print("Test accuracy: ", accs)
         self.save_results()

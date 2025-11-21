@@ -21,13 +21,17 @@ EVAL_WIN = 100
 def main(dataset, algorithm, model, batch_size, learning_rate, num_glob_iters,
          local_epochs, optimizer, num_users, client_modalities_dict, times): \
 
-
+        
     if dataset == 'opp':
         rep_size = 10
     elif dataset == 'mhealth':
         rep_size = 4
     elif dataset == 'ur_fall':
         rep_size = 4
+        batch_size = 4
+    elif dataset == "hapt":
+        rep_size = 10
+
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -95,6 +99,13 @@ def main(dataset, algorithm, model, batch_size, learning_rate, num_glob_iters,
                              num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,
                              num_users=num_users, times=times)
         
+        if algorithm.lower() == "fedproto":
+            server = FedProto(dataset, algorithm, input_sizes=input_sizes,
+                             modalities=client_modalities_list, rep_size=rep_size, n_classes=n_classes,
+                             batch_size=batch_size, learning_rate=learning_rate, beta=1.0, lamda=0.0,
+                             num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,
+                             num_users=num_users, times=times)
+        
         if algorithm.lower() == "fedmekt":
             server = FedMEKT(dataset, algorithm, input_sizes=input_sizes,
                              modalities=client_modalities_list, rep_size=rep_size, n_classes=n_classes,
@@ -110,7 +121,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     torch.backends.cudnn.enabled = False
     # opp:361620
-    parser.add_argument("--dataset", type=str, default="opp", choices=["mhealth", "opp", "ur_fall"])
+    parser.add_argument("--dataset", type=str, default="opp", choices=["mhealth", "opp", "ur_fall","uci_har","hapt"])
     parser.add_argument("--model", type=str, default="dnn", choices=["dnn", "cnn"])
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--learning_rate", type=float, default=0.001, help="Local learning rate")
@@ -143,7 +154,9 @@ if __name__ == "__main__":
     client_modalities_dict = {
         "mhealth": [5, 5, 5],
         "opp": [5, 5],
-        "ur_fall": [5, 5, 5]
+        "ur_fall": [5, 5, 5],
+        "uci_har": [5, 5],
+        "hapt": [5, 5]
     }
     args.numusers = sum(client_modalities_dict[args.dataset])
 

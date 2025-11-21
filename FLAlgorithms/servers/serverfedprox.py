@@ -67,8 +67,10 @@ class FedProx(Server):
             self.rs_train_loss.append(loss)
             self.rs_glob_acc.append(acc)
             self.rs_glob_f1.append(f1)
-
+            print("all saved1")
+        print("all saved2")
         accs = self.test_clients()
         print("Test accuracy: ", accs)
+        print("all saved")
         self.save_results()
         pass

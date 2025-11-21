@@ -92,7 +92,7 @@ class SplitLSTMAutoEncoder(nn.Module):
     def encode(self, x, modality):
         assert modality in self.modalities, f"Modality {modality} not found"
         out, out1 = self.encoders[modality](x)
-        return out, out1
+        return out, out1  #MID , FINAL
 
     def decode(self, h, modality, seq_len=None):
         assert modality in self.modalities, f"Modality {modality} not found"

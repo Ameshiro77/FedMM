@@ -5,3 +5,4 @@ from FLAlgorithms.servers.serverfedprox import FedProx
 from FLAlgorithms.servers.servermoon import FedMoon
 from FLAlgorithms.servers.servermekt import FedMEKT
 from FLAlgorithms.servers.servercent import FedCent
+from FLAlgorithms.servers.serverproto import FedProto

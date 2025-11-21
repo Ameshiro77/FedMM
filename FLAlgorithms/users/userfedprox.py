@@ -21,7 +21,7 @@ class UserFedprox(User):
                          beta, lamda, local_epochs,
                          label_ratio)
         
-        self.mu = 0.01
+        self.mu = 0.1
 
 
     def train_ae_prox(self, global_model=None):
@@ -71,9 +71,9 @@ class UserFedprox(User):
                                     local_param = local_state_dict[key]
                                     global_param = global_state_dict[key]
                                     prox_loss += torch.norm(local_param - global_param, p=2) ** 2
-                                
+                
                 total_loss_value = rec_loss + (self.mu / 2) * prox_loss
-                print(prox_loss)
+                print("prox loss:", prox_loss)
                 total_loss_value.backward()
                 self.optimizer_ae.step()
                 total_loss += total_loss_value.item()

@@ -10,6 +10,7 @@ from FLAlgorithms.users.userbase import User
 # Implementation for clients
 from utils.model_utils import *
 from FLAlgorithms.config import *
+from FLAlgorithms.trainmodel.losses import *
 
 
 class UserProp(User):
@@ -85,7 +86,25 @@ class UserProp(User):
         
         return prototypes
 
+    def upload_specs(self):
+        self.ae_model.eval()
+        z_specs_dict = {m: None for m in self.modalities}
 
+        modalities_seq, _ = make_seq_batch2(self.unlabeled_data, self.batch_size)
+        X_modal = {m: modalities_seq[m] for m in self.modalities}
+        seq_len = X_modal[self.modalities[0]].shape[1]  # 64 100 63
+
+        idx_end = 0
+        win_num = 0
+        temp_z_windows = {m: [] for m in self.modalities}  # 用于存窗口
+        
+        for m in self.modalities:
+            x_m = torch.from_numpy(X_modal[m]).to(self.device)  
+            z_share, z_spec, _ = self.ae_model.encode(x_m,m)       
+            z_mean = z_spec.mean(dim=1)                         # [B, D]
+            z_specs_dict[m] = z_mean.detach().cpu()
+  
+        return z_specs_dict
 
     def upload_shares(self):
         self.ae_model.eval()
@@ -147,10 +166,11 @@ class UserProp(User):
 
                     # 1. 本地重构 + 正交损失
                     rec_loss += self.rec_loss_fn(x_recon, x_m)
-                    orth_term = torch.mean(torch.abs(
-                        torch.sum(F.normalize(z_share, dim=-1) * F.normalize(z_spec, dim=-1), dim=-1)
-                    ))
-                    orth_loss += orth_term
+                    # orth_term = torch.mean(torch.abs(
+                    #     torch.sum(F.normalize(z_share, dim=-1) * F.normalize(z_spec, dim=-1), dim=-1)
+                    # ))
+                    # orth_loss += orth_term
+                    orth_loss += hsic_loss(z_share, z_spec)
 
                     # # 2. 对齐全局共享向量
                     # if global_share is not None:
@@ -162,8 +182,13 @@ class UserProp(User):
                     # 2. 对齐全局共享向量（使用余弦相似度）
                     if global_share is not None:
                         z_global_srv = global_share.detach().to(self.device)
-                        z_global_expand = z_global_srv.unsqueeze(0).expand_as(z_share)
-                        cos_sim = F.cosine_similarity(z_share, z_global_expand, dim=1)
+                        # z_global_expand = z_global_srv.unsqueeze(0).expand_as(z_share)
+                        # z_share: [B, T, D]
+                        # z_global_srv: [B, D] -> 扩展成 [B, T, D]
+                        print(z_global_srv.shape,z_share.shape)
+            
+
+                        cos_sim = F.cosine_similarity(z_share, z_global_srv, dim=1)
                         align_loss_term = 1 - cos_sim.mean()
                         align_loss += align_loss_term
 
@@ -203,7 +228,7 @@ class UserProp(User):
 
                 # 汇总损失
                 # loss = rec_loss + 0.01 * orth_loss + 0.1 * align_loss + 0.01 * reg_loss
-                loss = rec_loss + 0.01 * orth_loss + 0.1 * align_loss
+                loss = rec_loss + 0.1 * orth_loss + 0.5 * align_loss
                 loss.backward()
                 self.optimizer_ae.step()
 

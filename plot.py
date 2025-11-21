@@ -1,7 +1,7 @@
 import json
 import os
 import matplotlib.pyplot as plt
-
+from export import generate_table
 def compare_algorithms(results_dir="results"):
     """
     绘制不同算法的精度和F1分数比较图
@@ -90,66 +90,7 @@ def compare_algorithms(results_dir="results"):
             print(f"  {alg_name}: Accuracy={final_acc:.4f}, F1 Score={final_f1:.4f}")
 
 
-# 如果还需要单独的F1分数比较图，可以添加这个函数
-def plot_f1_comparison(results_dir="results"):
-    """
-    单独绘制F1分数比较图
-    """
-    import glob
-    
-    pattern = os.path.join(results_dir, "**", "*_acc.json")
-    json_files = glob.glob(pattern, recursive=True)
-    
-    if not json_files:
-        print(f"No accuracy JSON files found in {results_dir}")
-        return
-    
-    algorithms_data = {}
-    for json_file in json_files:
-        try:
-            with open(json_file, 'r') as f:
-                data = json.load(f)
-                
-            algorithm_name = data.get("algorithm", "Unknown")
-            dataset_name = data.get("dataset", "Unknown")
-            global_f1 = data.get("global_f1", [])
-            rounds = data.get("rounds", list(range(1, len(global_f1) + 1)))
-            
-            if dataset_name not in algorithms_data:
-                algorithms_data[dataset_name] = {}
-            
-            algorithms_data[dataset_name][algorithm_name] = {
-                "f1_score": global_f1,
-                "rounds": rounds
-            }
-            
-        except Exception as e:
-            print(f"Error reading {json_file}: {e}")
-    
-    for dataset, alg_data in algorithms_data.items():
-        plt.figure(figsize=(10, 6))
-        
-        for alg_name, data in alg_data.items():
-            rounds = data["rounds"]
-            f1_score = data["f1_score"]
-            plt.plot(rounds, f1_score, label=alg_name, linewidth=2)
-        
-        plt.xlabel("Communication Rounds")
-        plt.ylabel("Global F1 Score")
-        plt.title(f"F1 Score Comparison - {dataset}")
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        
-        comparison_dir = os.path.join(results_dir, "comparisons")
-        os.makedirs(comparison_dir, exist_ok=True)
-        f1_comparison_path = os.path.join(comparison_dir, f"{dataset}_f1_comparison.svg")
-        plt.savefig(f1_comparison_path, format="svg", bbox_inches='tight')
-        plt.close()
-        
-        print(f"F1 comparison plot saved to {f1_comparison_path}")
 
 
-# 运行比较
 compare_algorithms()
-# 如果需要单独的F1图，取消下面的注释
-# plot_f1_comparison()
+generate_table()

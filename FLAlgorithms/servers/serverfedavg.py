@@ -57,6 +57,8 @@ class FedAvg(Server):
             self.aggregate_parameters()
             self.send_ae_parameters()
 
+            
+
             for user in self.users:
                 user.train_cf()
 
@@ -67,7 +69,35 @@ class FedAvg(Server):
             self.rs_train_loss.append(loss)
             self.rs_glob_acc.append(acc)
             self.rs_glob_f1.append(f1)
+            
+            # =========================================================================================
+            # === 总通信量统计 ===
+            # total_uplink_bytes = 0
+            # total_downlink_bytes = 0
+            
+            # 计算总通信量（假设每轮通信量相同）
+            # server_ae_params = self.ae_model_server.state_dict()
+            # one_round_downlink = sum(param.numel() * 4 for param in server_ae_params.values())
+            # one_round_uplink = 0
+            
+            # for user in self.users:
+            #     user_ae_params = user.get_ae_parameters()
+            #     one_round_uplink += sum(param.numel() * 4 for param in user_ae_params.values())
+            
+            # total_uplink_bytes = one_round_uplink * self.num_glob_iters
+            # total_downlink_bytes = one_round_downlink * self.num_glob_iters 
+            
+            # print(f"\n=== FedAvg 通信量统计 ===")
+            # print(f"总轮数: {self.num_glob_iters}")
+            # print(f"总上行通信量: {total_uplink_bytes/1024/1024:.2f} MB")
+            # print(f"总下行通信量: {total_downlink_bytes/1024/1024:.2f} MB")
+            # print(f"总通信量: {(total_uplink_bytes+total_downlink_bytes)/1024/1024:.2f} MB")
+            # print(f"平均每轮上行: {total_uplink_bytes/self.num_glob_iters/1024:.2f} KB")
+            # print(f"平均每轮下行: {total_downlink_bytes/self.num_glob_iters/1024:.2f} KB")
+            # print(f"平均每轮通信量: {(total_uplink_bytes+total_downlink_bytes)/self.num_glob_iters/1024:.2f} KB")
+            # exit()
+        
         accs = self.test_clients()
         print("Test accuracy: ", accs)
         self.save_results()
-        pass
+       

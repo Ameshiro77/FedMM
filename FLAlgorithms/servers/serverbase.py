@@ -19,6 +19,7 @@ class Server:
         self.num_glob_iters = num_glob_iters
         self.local_epochs = local_epochs
         self.batch_size = batch_size
+
         self.learning_rate = learning_rate
         self.total_train_samples = 0
         self.algorithm = algorithm
@@ -47,7 +48,7 @@ class Server:
 
         # 服务端的train_data全是labeled
         self.server_train_data, self.clients_train_data = split_server_train(train_data, dataset=dataset, ratio=0.1)
-        self.clients_train_data_list = split_clients_train(self.clients_train_data, self.total_users)
+        self.clients_train_data_list = split_clients_train(self.clients_train_data, self.total_users,self.dataset)
 
         self.modalities_server = [m for m in self.server_train_data if m != "y"]
         self.ae_model_server = SplitLSTMAutoEncoder(input_sizes, rep_size).to(device)
@@ -369,9 +370,10 @@ class Server:
     def test_clients(self):
         client_accs = []
         modality_accs = {}   # {mod_name: [acc1, acc2, ...]}
-
+   
         for c in self.users:
             acc, _ = c.test()
+            print(f"→ client {c.client_id} done, acc={acc:.4f}", flush=True)
             client_accs.append(acc)
 
             # 收集该客户端对应模态的精度
@@ -396,49 +398,6 @@ class Server:
             json.dump(results, f, indent=2)
         return client_accs, avg_client_acc, avg_modality_acc
 
-
-    # def test_server(self):
-    #     """服务器端测试集评估"""
-    #     self.ae_model_server.eval()
-    #     self.cf_model_server.eval()
-
-    #     total_loss, total_correct, total_samples = 0.0, 0, 0
-    #     eval_win = 2000
-
-    #     with torch.no_grad():
-    #         for start in range(0, len(self.test_data["y"]) - eval_win + 1, eval_win):
-    #             batch_x = {
-    #                 m: torch.tensor(
-    #                     self.test_data[m][start:start + eval_win],
-    #                     dtype=torch.float32, device=self.device
-    #                 ).unsqueeze(0)
-    #                 for m in self.modalities_server
-    #             }
-    #             batch_y = torch.tensor(
-    #                 self.test_data["y"][start:start + eval_win],
-    #                 dtype=torch.long, device=self.device
-    #             )
-
-    #             reps = []
-    #             for m in self.modalities_server:
-    #                 _, hidden_seq = self.ae_model_server.encode(batch_x[m], m)
-    #                 reps.append(hidden_seq.squeeze(0))
-
-    #             reps_cat = torch.cat(reps, dim=-1)
-    #             outputs = self.cf_model_server(reps_cat)
-
-    #             loss = self.cls_loss_fn(outputs, batch_y)
-    #             preds = torch.argmax(outputs, dim=1)
-
-    #             total_loss += loss.item() * batch_y.size(0)
-    #             total_correct += (preds == batch_y).sum().item()
-    #             total_samples += batch_y.size(0)
-
-    #     avg_loss = total_loss / total_samples
-    #     avg_acc = total_correct / total_samples
-
-    #     print(f"Server Test - Loss: {avg_loss:.4f}, Accuracy: {avg_acc:.4f}")
-    #     return avg_loss, avg_acc,None
     
     def test_server(self):
         """服务器端测试集评估"""

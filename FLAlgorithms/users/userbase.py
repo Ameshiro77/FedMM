@@ -109,33 +109,33 @@ class User:
         ae_params, cf_params = new_params
         self.set_parameters(ae_params, cf_params)
 
-    def train_ae(self,global_share, pre_w, epochs=1):
+    def train_ae(self):
         self.ae_model.train()
         self.cf_model.eval()
 
         total_loss = 0.0
+        for ep in range(self.local_epochs):
+            modalities_seq, _ = make_seq_batch2(self.unlabeled_data, self.batch_size)
+            X_modal = {m: modalities_seq[m] for m in self.modalities}
+            seq_len = X_modal[self.modalities[0]].shape[1]
 
-        modalities_seq, _ = make_seq_batch2(self.unlabeled_data, self.batch_size)
-        X_modal = {m: modalities_seq[m] for m in self.modalities}
-        seq_len = X_modal[self.modalities[0]].shape[1]
+            idx_end = 0
+            while idx_end < seq_len:
+                win_len = np.random.randint(16, 32)
+                idx_start = idx_end
+                idx_end = min(idx_end + win_len, seq_len)
 
-        idx_end = 0
-        while idx_end < seq_len:
-            win_len = np.random.randint(16, 32)
-            idx_start = idx_end
-            idx_end = min(idx_end + win_len, seq_len)
+                self.optimizer_ae.zero_grad()
+                rec_loss = 0.0
 
-            self.optimizer_ae.zero_grad()
-            rec_loss = 0.0
+                for m in self.modalities:
+                    x_m = torch.from_numpy(X_modal[m][:, idx_start:idx_end, :]).to(self.device)
+                    recon = self.ae_model(x_m, m)
+                    rec_loss += self.rec_loss_fn(recon, x_m)
 
-            for m in self.modalities:
-                x_m = torch.from_numpy(X_modal[m][:, idx_start:idx_end, :]).to(self.device)
-                recon = self.ae_model(x_m, m)
-                rec_loss += self.rec_loss_fn(recon, x_m)
-
-            rec_loss.backward()
-            self.optimizer_ae.step()
-            total_loss += rec_loss.item()
+                rec_loss.backward()
+                self.optimizer_ae.step()
+                total_loss += rec_loss.item()
 
         return total_loss / max(1, seq_len // self.batch_size)
 
@@ -143,43 +143,51 @@ class User:
         self.freeze(self.ae_model)
         self.cf_model.train()
 
-        total_loss, total_correct, total_samples = 0.0, 0, 0
+        for epoch in range(self.local_epochs):
+            total_loss, total_correct, total_samples = 0.0, 0, 0
+            
+            # 构造有监督数据序列
+            print(self.batch_size,len(self.labeled_data['y']))
+            modalities_seq, y_seq = make_seq_batch2(self.labeled_data, self.batch_size)
+            X_modal = {m: modalities_seq[m] for m in self.modalities}
+            seq_len = X_modal[self.modalities[0]].shape[1]
 
-        # 构造有监督数据序列
-        modalities_seq, y_seq = make_seq_batch2(self.labeled_data, self.batch_size)
-        X_modal = {m: modalities_seq[m] for m in self.modalities}
-        seq_len = X_modal[self.modalities[0]].shape[1]
+            idx_end = 0
+            while idx_end < seq_len:
+                win_len = np.random.randint(16, 32)
+                idx_start = idx_end
+                idx_end = min(idx_end + win_len, seq_len)
 
-        idx_end = 0
-        while idx_end < seq_len:
-            win_len = np.random.randint(16, 32)
-            idx_start = idx_end
-            idx_end = min(idx_end + win_len, seq_len)
+                self.optimizer_cf.zero_grad()
+                latents = []
 
-            self.optimizer_cf.zero_grad()
-            latents = []
+                # 取每个模态的 latent
+                for m in self.modalities:
+                    x_m = torch.from_numpy(X_modal[m][:, idx_start:idx_end, :]).to(self.device)
+                    latents.append(self.ae_model.encode(x_m, m)[1])
 
-            # 取每个模态的 latent
-            for m in self.modalities:
-                x_m = torch.from_numpy(X_modal[m][:, idx_start:idx_end, :]).to(self.device)
-                latents.append(self.ae_model.encode(x_m, m)[1])
+                latent_cat = torch.cat(latents, dim=1)
+                y_batch = torch.from_numpy(y_seq[:, idx_start:idx_end]).to(self.device).reshape(-1).long()
 
-            latent_cat = torch.cat(latents, dim=1)
-            y_batch = torch.from_numpy(y_seq[:, idx_start:idx_end]).to(self.device).reshape(-1).long()
+                logits = self.cf_model(latent_cat)
+                loss = self.cls_loss_fn(logits, y_batch)
 
-            logits = self.cf_model(latent_cat)
-            loss = self.cls_loss_fn(logits, y_batch)
+                loss.backward()
+                self.optimizer_cf.step()
 
-            loss.backward()
-            self.optimizer_cf.step()
+                total_loss += loss.item()
+                total_correct += (torch.argmax(logits, dim=1) == y_batch).sum().item()
+                total_samples += y_batch.size(0)
 
-            total_loss += loss.item()
-            total_correct += (torch.argmax(logits, dim=1) == y_batch).sum().item()
-            total_samples += y_batch.size(0)
+            # 每轮结束计算指标
+            epoch_loss = total_loss / max(1, seq_len // self.batch_size)
+            epoch_acc = total_correct / total_samples if total_samples > 0 else 0.0
+            
+            # 打印训练信息（可选）
+            print(f'Epoch [{epoch+1}/{self.local_epochs}], Loss: {epoch_loss:.4f}, Acc: {epoch_acc:.4f}')
 
-        acc = total_correct / total_samples if total_samples > 0 else 0.0
         self.unfreeze(self.ae_model)
-        return total_loss / max(1, seq_len // self.batch_size), acc
+        return epoch_loss, epoch_acc
 
     # -----------------------------
     # 联合训练（重构 + 分类）
@@ -253,7 +261,7 @@ class User:
         self.ae_model.eval()
         self.cf_model.eval()
         total_loss, total_correct, total_samples = 0.0, 0, 0
-
+        
         with torch.no_grad():
             for start in range(0, len(self.test_data["y"]) - eval_win + 1, eval_win):
                 batch_x = {m: torch.tensor(
@@ -273,7 +281,6 @@ class User:
                 # ------- classifier -------
                 outputs = self.cf_model(reps)
                 # print(outputs.shape, batch_y.shape)
-                exit()
                 loss = self.cls_loss_fn(outputs, batch_y)
 
                 total_loss += loss.item() * batch_y.size(0)
