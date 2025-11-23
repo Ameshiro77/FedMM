@@ -221,9 +221,9 @@ class UserProp(User):
                 # === 总损失 ===
                 loss = (
                     rec_loss
-                    + 0.01 * orth_loss
-                    + 0.1 * align_loss
-                    + 0.01 * reg_loss
+                    + 0.1 * orth_loss
+                    + 1.0 * align_loss
+                    + 0.1 * reg_loss
                 )
 
                 # 汇总损失
@@ -392,7 +392,7 @@ class UserProp(User):
                 reps = []
                 for m in self.modalities:
                     # encode() 返回 (z_share, z_spec)
-                    print(batch_x[m].shape, m)
+                    # print(batch_x[m].shape, m)
                     z_share, z_spec, out = self.ae_model.encode(batch_x[m], m)
                     z_latent = torch.cat([z_share, z_spec], dim=-1)
                     # print(z_share.shape, z_spec.shape, z_latent.shape)
@@ -415,3 +415,40 @@ class UserProp(User):
         avg_loss = total_loss / total_samples
         avg_acc = total_correct / total_samples
         return avg_acc, avg_loss
+
+    def save_model(self, save_dir="./saved_clients"):
+        """
+        保存该客户端的模型（AE + CF）及客户端标识。
+        保存格式：
+            save_dir/client_{id}_ae.pt
+            save_dir/client_{id}_cf.pt
+        """
+        os.makedirs(save_dir, exist_ok=True)
+
+        ae_path = os.path.join(save_dir, f"client_{self.client_id}_ae.pt")
+        cf_path = os.path.join(save_dir, f"client_{self.client_id}_cf.pt")
+
+        # 只保存 state_dict，不保存整个对象，兼容性最好
+        torch.save({
+            "client_id": self.client_id,
+            "ae_state": self.ae_model.state_dict()
+        }, ae_path)
+
+        torch.save({
+            "client_id": self.client_id,
+            "cf_state": self.cf_model.state_dict()
+        }, cf_path)
+
+        print(f"[Client {self.client_id}] 模型已保存：")
+        print(f" - AE: {ae_path}")
+        print(f" - CF: {cf_path}")
+        
+    def load_model(self, ae_path, cf_path):
+        """加载 AE 与 CF 模型权重"""
+        ae_ckpt = torch.load(ae_path, map_location=self.device)
+        cf_ckpt = torch.load(cf_path, map_location=self.device)
+
+        self.ae_model.load_state_dict(ae_ckpt["ae_state"])
+        self.cf_model.load_state_dict(cf_ckpt["cf_state"])
+
+        print(f"[Client {self.client_id}] 模型加载完毕")

@@ -5,7 +5,7 @@ import h5py
 import copy
 from torch.utils.data import DataLoader, TensorDataset
 from utils.model_utils import *
-from FLAlgorithms.trainmodel.ae_model import SplitLSTMAutoEncoder, MLP
+from FLAlgorithms.trainmodel.ae_model import SplitLSTMAutoEncoder, MLP,FusionNet
 import matplotlib.pyplot as plt
 from FLAlgorithms.config import EVAL_WIN
 
@@ -39,6 +39,8 @@ class Server:
         # ae_model_class_or_dict may be a class or a dict of modules
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+        self.fusionNet = FusionNet(modalities, rep_size).to(self.device)
+
         self.rec_loss_fn = nn.MSELoss()
         self.cls_loss_fn = nn.CrossEntropyLoss()
 
@@ -52,7 +54,8 @@ class Server:
 
         self.modalities_server = [m for m in self.server_train_data if m != "y"]
         self.ae_model_server = SplitLSTMAutoEncoder(input_sizes, rep_size).to(device)
-        self.cf_model_server = MLP(rep_size*len(self.modalities_server), n_classes).to(device)
+        # self.cf_model_server = MLP(rep_size*len(self.modalities_server), n_classes).to(device)
+        self.cf_model_server = MLP(rep_size, n_classes).to(device)
 
         self.optimizer_ae = torch.optim.Adam(self.ae_model_server.parameters(), lr=learning_rate)
         self.optimizer_cf = torch.optim.Adam(self.cf_model_server.parameters(), lr=learning_rate)
@@ -96,6 +99,35 @@ class Server:
                 rec_loss.backward()
                 self.optimizer_ae.step()
 
+    # def train_classifier(self):
+    #     """利用有标签数据训练分类器"""
+    #     self.freeze(self.ae_model_server)
+    #     modalities_seq, y_seq = make_seq_batch2(self.server_train_data, self.batch_size, seq_len=100)
+    #     seq_len_batch = modalities_seq[self.modalities_server[0]].shape[1]
+
+    #     idx_end = 0
+    #     while idx_end < seq_len_batch:
+    #         win_len = np.random.randint(16, 32)
+    #         idx_start = idx_end
+    #         idx_end = min(idx_end + win_len, seq_len_batch)
+
+    #         self.optimizer_cf.zero_grad()
+    #         latents = []
+
+    #         # 编码每个模态
+    #         for m in self.modalities_server:
+    #             x_m = torch.from_numpy(modalities_seq[m][:, idx_start:idx_end, :]).float().to(self.device)
+    #             _, hidden_seq = self.ae_model_server.encode(x_m, m)
+    #             latents.append(hidden_seq[:, -1, :])
+            
+    #         latent_cat = torch.cat(latents, dim=1)
+    #         y_batch = torch.from_numpy(y_seq[:, idx_start]).long().to(self.device)
+    #         logits = self.cf_model_server(latent_cat)
+    #         cls_loss = self.cls_loss_fn(logits, y_batch)
+    #         cls_loss.backward()
+    #         self.optimizer_cf.step()
+    #     self.unfreeze(self.ae_model_server)
+    
     def train_classifier(self):
         """利用有标签数据训练分类器"""
         self.freeze(self.ae_model_server)
@@ -109,18 +141,19 @@ class Server:
             idx_end = min(idx_end + win_len, seq_len_batch)
 
             self.optimizer_cf.zero_grad()
-            latents = []
+
 
             # 编码每个模态
+            z_m_all = {}
             for m in self.modalities_server:
                 x_m = torch.from_numpy(modalities_seq[m][:, idx_start:idx_end, :]).float().to(self.device)
                 _, hidden_seq = self.ae_model_server.encode(x_m, m)
-                latents.append(hidden_seq[:, -1, :])
-
-            latent_cat = torch.cat(latents, dim=1)
-            y_batch = torch.from_numpy(y_seq[:, idx_start]).long().to(self.device)
-            logits = self.cf_model_server(latent_cat)
-            cls_loss = self.cls_loss_fn(logits, y_batch)
+                z_m_all[m] = hidden_seq    # 直接保持与训练阶段一致
+  
+            z_fuse = self.fusionNet(z_m_all)
+            logits = self.cf_model_server(z_fuse)
+            y_true = torch.from_numpy(y_seq[:, idx_start:idx_end]).to(self.device).flatten().long()
+            cls_loss = self.cls_loss_fn(logits, y_true)
             cls_loss.backward()
             self.optimizer_cf.step()
         self.unfreeze(self.ae_model_server)
@@ -399,6 +432,62 @@ class Server:
         return client_accs, avg_client_acc, avg_modality_acc
 
     
+    # def test_server(self):
+    #     """服务器端测试集评估"""
+    #     self.ae_model_server.eval()
+    #     self.cf_model_server.eval()
+
+    #     total_loss, total_correct, total_samples = 0.0, 0, 0
+    #     eval_win = EVAL_WIN
+    #     # 添加F1 Score计算所需的变量
+    #     all_preds = []
+    #     all_labels = []
+
+    #     with torch.no_grad():
+    #         for start in range(0, len(self.test_data["y"]) - eval_win + 1, eval_win):
+    #             batch_x = {
+    #                 m: torch.tensor(
+    #                     self.test_data[m][start:start + eval_win],
+    #                     dtype=torch.float32, device=self.device
+    #                 ).unsqueeze(0)
+    #                 for m in self.modalities_server
+    #             }
+    #             batch_y = torch.tensor(
+    #                 self.test_data["y"][start:start + eval_win],
+    #                 dtype=torch.long, device=self.device
+    #             )
+
+    #             reps = []
+    #             for m in self.modalities_server:
+    #                 _, hidden_seq = self.ae_model_server.encode(batch_x[m], m)
+    #                 reps.append(hidden_seq.squeeze(0))
+
+    #             reps_cat = torch.cat(reps, dim=-1)
+    #             outputs = self.cf_model_server(reps_cat)
+
+    #             loss = self.cls_loss_fn(outputs, batch_y)
+    #             preds = torch.argmax(outputs, dim=1)
+
+    #             total_loss += loss.item() * batch_y.size(0)
+    #             total_correct += (preds == batch_y).sum().item()
+    #             total_samples += batch_y.size(0)
+                
+    #             # 收集预测结果和真实标签
+    #             all_preds.append(preds.cpu())
+    #             all_labels.append(batch_y.cpu())
+
+
+    #     all_preds = torch.cat(all_preds)
+    #     all_labels = torch.cat(all_labels)
+    #     from sklearn.metrics import f1_score
+    #     f1 = f1_score(all_labels.numpy(), all_preds.numpy(), average='weighted')  # 对于多分类使用加权平均
+        
+    #     avg_loss = total_loss / total_samples
+    #     avg_acc = total_correct / total_samples
+
+    #     print(f"Server Test - Loss: {avg_loss:.4f}, Accuracy: {avg_acc:.4f}, F1 Score: {f1:.4f}")
+    #     return avg_loss, avg_acc, f1
+    
     def test_server(self):
         """服务器端测试集评估"""
         self.ae_model_server.eval()
@@ -424,13 +513,15 @@ class Server:
                     dtype=torch.long, device=self.device
                 )
 
-                reps = []
+                z_m_all = {}
                 for m in self.modalities_server:
-                    _, hidden_seq = self.ae_model_server.encode(batch_x[m], m)
-                    reps.append(hidden_seq.squeeze(0))
+                    _, hidden_seq = self.ae_model_server.encode(batch_x[m], m)  
+                    # hidden_seq: [1, T, D]
+                    z_m_all[m] = hidden_seq    # 直接保持与训练阶段一致
 
-                reps_cat = torch.cat(reps, dim=-1)
-                outputs = self.cf_model_server(reps_cat)
+      
+                z_fuse = self.fusionNet(z_m_all)
+                outputs = self.cf_model_server(z_fuse)
 
                 loss = self.cls_loss_fn(outputs, batch_y)
                 preds = torch.argmax(outputs, dim=1)

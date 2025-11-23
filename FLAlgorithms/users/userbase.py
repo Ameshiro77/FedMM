@@ -147,7 +147,7 @@ class User:
             total_loss, total_correct, total_samples = 0.0, 0, 0
             
             # 构造有监督数据序列
-            print(self.batch_size,len(self.labeled_data['y']))
+            # print(self.batch_size,len(self.labeled_data['y']))
             modalities_seq, y_seq = make_seq_batch2(self.labeled_data, self.batch_size)
             X_modal = {m: modalities_seq[m] for m in self.modalities}
             seq_len = X_modal[self.modalities[0]].shape[1]

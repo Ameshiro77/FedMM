@@ -177,3 +177,20 @@ class MLP(nn.Module):
         out = self.fc(x)
         out = out.contiguous().view(-1, self.n_classes)
         return F.log_softmax(out, dim=1)
+
+class FusionNet(nn.Module):
+    def __init__(self, modalities, rep_size):
+        super().__init__()
+        self.modalities = modalities
+        # 每个模态一个可学习 scalar
+        self.weights = nn.Parameter(torch.ones(len(modalities)))
+        self.softmax = nn.Softmax(dim=0)
+
+    def forward(self, z_dict):
+        """
+        z_dict[m] = [B, D]
+        """
+        w = self.softmax(self.weights)        # [M]
+        z_list = list(z_dict.values())        # [M * [B, D]]
+        fused = sum(w[i] * z_list[i] for i in range(len(z_list)))
+        return fused          # [B, D]

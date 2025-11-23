@@ -37,7 +37,7 @@ class FedProp(Server):
             requires_grad=True
         )
         self.modality_weight = nn.ParameterDict({
-        m: nn.Parameter(torch.tensor(1.0)) for m in self.modalities_server
+            m: nn.Parameter(torch.tensor(1.0)) for m in self.modalities_server
         })
 
         self.softmax = torch.nn.Softmax(dim=0)
@@ -141,29 +141,29 @@ class FedProp(Server):
 
         # === 绘制2D图 ===
         plt.figure(figsize=(10, 8))
-        
+
         # 获取唯一模态并分配颜色
         unique_modalities = sorted(set(all_modalities))
         palette = sns.color_palette("tab10", len(unique_modalities))
-        
+
         # 为每个模态绘制散点
         for i, modality in enumerate(unique_modalities):
             mask = [m == modality for m in all_modalities]
             modality_emb = z_emb[mask]
             modality_labels = np.array(all_labels)[mask]
-            
+
             plt.scatter(
                 modality_emb[:, 0], modality_emb[:, 1],
                 color=palette[i],
                 label=f'Modality {modality}',
                 s=60, alpha=0.8, edgecolor='k', linewidth=0.2
             )
-            
+
             # 可选：在点上标注类别标签
             for j, (x, y) in enumerate(modality_emb):
-                plt.annotate(str(modality_labels[j]), (x, y), 
-                            xytext=(5, 5), textcoords='offset points',
-                            fontsize=6, alpha=0.7)
+                plt.annotate(str(modality_labels[j]), (x, y),
+                             xytext=(5, 5), textcoords='offset points',
+                             fontsize=6, alpha=0.7)
 
         plt.title(f"2D Prototype Distribution by Modality (Iter {glob_iter})", fontsize=14)
         plt.xlabel("TSNE-1")
@@ -173,7 +173,7 @@ class FedProp(Server):
         plt.tight_layout()
         plt.savefig(f"results/dist/prototypes2D_{self.dataset}_{glob_iter}.png", dpi=300)
         plt.close()
-    
+
     def train_server(self, z_shares_all_list, prototypes_weights, glob_iter):
         """
         服务端蒸馏 + 对齐 + 分类联合训练
@@ -183,7 +183,7 @@ class FedProp(Server):
 
         # =========================================================================================
         # === Step 1. 聚合同模态客户端特征 ===
-        
+
         # z_shares
         z_shares_all = {}
         for client_dict in z_shares_all_list:
@@ -199,12 +199,11 @@ class FedProp(Server):
         for m, zs in z_shares_all.items():
             z_means = torch.stack(zs, dim=0)  # [num_clients_m, B, D_m]
             z_modal_clients[m] = z_means.mean(dim=0).to(self.device)  # FedAvg
-            
 
         # === Step 2. 使用服务端数据进行训练 ===
         modalities_seq, labels = make_seq_batch2(self.server_train_data, self.batch_size)
         seq_len_batch = modalities_seq[self.modalities_server[0]].shape[1]
-
+        z_fuse_all = []
         for epoch in range(1):
             idx_end = 0
             while idx_end < seq_len_batch:
@@ -224,8 +223,6 @@ class FedProp(Server):
                     x_m = torch.from_numpy(modalities_seq[m][:, idx_start:idx_end, :]).float().to(self.device)
                     _, z_m = self.ae_model_server.encode(x_m, m)      # [B, T, D]
                     z_m_all[m] = z_m
-            
-
                     z_m_pooled = z_m.mean(dim=1)                      # [B, D]
 
                     # ====== 准备客户端特征 bank ======
@@ -240,14 +237,8 @@ class FedProp(Server):
                     # dist_loss += cosine_loss
 
                     # ====== 2. MMD（使用你引入的新 MMD 函数） ======
-                    mmd_loss_val = compute_mmd(z_s, z_c)   
+                    mmd_loss_val = compute_mmd(z_s, z_c)
                     dist_loss += mmd_loss_val
-
-
-                    # 4.constra
-                    # Normalize
-                    # z_s = F.normalize(z_m_pooled, dim=-1)
-                    # z_c = F.normalize(z_modal_clients[m], dim=-1)
 
                     # # 相似度矩阵
                     # sim = torch.matmul(z_s, z_c.T) / tau   # [B, B]
@@ -255,26 +246,25 @@ class FedProp(Server):
                     # loss_contrast = F.cross_entropy(sim, labels)
                     # dist_loss += loss_contrast
 
-
                 # === Step 4. 模态加权融合 ===
-                weight_tensor = torch.stack([self.modality_weight[m] for m in z_m_all.keys()])  # [M]
-                weight_norm = torch.softmax(weight_tensor, dim=0)
+                # weight_tensor = torch.stack([self.modality_weight[m] for m in z_m_all.keys()])  # [M]
+                # weight_norm = torch.softmax(weight_tensor, dim=0)
 
-                z_global = sum(weight_norm[i] * z_m_all[m] for i, m in enumerate(z_m_all.keys()))  # [B, D]
-                
+                # z_global = sum(weight_norm[i] * z_m_all[m] for i, m in enumerate(z_m_all.keys()))  # [B, D]
 
-            
                 # === Step 4. 模态间语义对齐 ===
                 # 对齐
-                z_proj = [self.proj_heads[m](z_m_all[m]) for m in z_m_all.keys()]
-                z_center = torch.stack(z_proj).mean(dim=0)
-                # align_loss = sum(F.mse_loss(z_proj[i], z_center) for i in range(len(z_proj)))
-                z_proj_dict = {m: self.proj_heads[m](z_m_all[m]) for m in z_m_all.keys()}
-                align_loss = contrastive_modality_align(z_proj_dict)
-
+                # z_proj = [self.proj_heads[m](z_m_all[m]) for m in z_m_all.keys()]
+                # z_center = torch.stack(z_proj).mean(dim=0)
+                # # align_loss = sum(F.mse_loss(z_proj[i], z_center) for i in range(len(z_proj)))
+                # z_proj_dict = {m: self.proj_heads[m](z_m_all[m]) for m in z_m_all.keys()}
+                # align_loss = contrastive_modality_align(z_proj_dict)
 
                 # === Step 5. 分类训练 ===
-                z_fuse = torch.cat([z for z in z_m_all.values()], dim=-1)
+                # z_fuse = torch.cat([z for z in z_m_all.values()], dim=-1)
+
+                z_fuse = self.fusionNet(z_m_all)  # B,W,D
+                z_fuse_all.append(z_fuse)
                 y_true = torch.from_numpy(labels[:, idx_start:idx_end]).to(self.device).flatten().long()
 
                 logits = self.cf_model_server(z_fuse)
@@ -283,7 +273,6 @@ class FedProp(Server):
                 # print(logits.shape,y_true.shape)
                 cls_loss = self.cls_loss_fn(logits, y_true)
 
-                    
                 for cls_id in y_true.unique():
                     cls_mask = (y_true == cls_id)
                     if cls_mask.sum() > 0:
@@ -297,31 +286,30 @@ class FedProp(Server):
                             self.logits_bank[cls_id.item()] = (
                                 0.5 * self.logits_bank[cls_id.item()] + 0.5 * logits_cls.clone().detach()
                             )
-                
 
                 # === Step 6. 总损失 ===
                 total_loss = (
-                    0.5 * dist_loss +
-                    0.01 * align_loss +
+                    1.0 * dist_loss +
+                    0.00 * align_loss +
                     1.0 * cls_loss
                 )
-            
+
                 total_loss.backward()
                 self.optimizer_ae.step()
                 self.optimizer_cf.step()
 
             print(f"[Server Train] Distill={dist_loss:.4f} Align={align_loss:.4f} Cls={cls_loss:.4f}")
 
-            z_global_center = z_center.mean(dim=0).detach()  # 跨batch平均
+            # z_global_center = z_center.mean(dim=0).detach()  # 跨batch平均
 
         self.server_loss_history['distill_loss'].append(dist_loss.item())
-        self.server_loss_history['align_loss'].append(align_loss.item())
+        # self.server_loss_history['align_loss'].append(align_loss.item())
         self.server_loss_history['cls_loss'].append(cls_loss.item())
         self.server_loss_history['total_loss'].append(total_loss.item())
         # self.server_loss_history['proto_loss'].append(proto_loss.item())
 
-        print(z_global_center.shape, "111")
-        
+        # print(z_global_center.shape, "111")
+
         # with torch.no_grad():
         #     modalities_seq, _ = make_seq_batch2(self.server_train_data, self.batch_size)
         #     # 一次性取全量窗口
@@ -335,10 +323,11 @@ class FedProp(Server):
         #     weight_tensor = torch.stack([self.modality_weight[m] for m in z_m_all.keys()])
         #     weight_norm = torch.softmax(weight_tensor, dim=0)
         #     z_global_final = sum(weight_norm[i] * z_m_all[m] for i, m in enumerate(z_m_all.keys()))  # [B, D]
-    
+
         # return z_global_center.mean(dim=0), global_prototypes, self.logits_bank
-        return z_global_center.mean(dim=0), None, self.logits_bank
+        # return z_global_center.mean(dim=0), None, self.logits_bank
         # return z_global.mean(dim=1).detach().cpu(), None, self.logits_bank
+        return torch.cat(z_fuse_all, dim=1).mean(dim=1).detach(), None, self.logits_bank
 
     def train(self):
         for glob_iter in range(self.num_glob_iters):
@@ -347,7 +336,8 @@ class FedProp(Server):
             # Step 1: 客户端提取 z_share
             self.selected_users = self.select_users(glob_iter, self.num_users)
             z_shares_all = [user.upload_shares() for user in self.selected_users]
-            prototypes_weights = [ (user.upload_prototype(), user.get_prototype_weight()) for user in self.selected_users]
+            prototypes_weights = [(user.upload_prototype(), user.get_prototype_weight())
+                                  for user in self.selected_users]
 
             # Step 2: 服务器训练
             z_global, global_prototypes, server_logits = self.train_server(z_shares_all, prototypes_weights, glob_iter)
@@ -396,31 +386,48 @@ class FedProp(Server):
             #     for proto in proto_dict.values():
             #         uplink_bytes += proto.numel() * 4
             #     uplink_bytes += len(weight_dict) * 4
-            
+
             # # 下行通信量 (发送给每个选中的客户端)
             # downlink_bytes = 0
             # downlink_bytes += z_global.numel() * 4 * len(self.selected_users)  # z_global
             # for logits in server_logits.values():
             #     downlink_bytes += logits.numel() * 4 * len(self.selected_users)  # server_logits
-            
+
             # print(f"\n=== 单轮通信量统计 ===")
             # print(f"选中客户端数量: {len(self.selected_users)}")
             # print(f"单轮上行通信量: {uplink_bytes/1024:.2f} KB")
-            # print(f"单轮下行通信量: {downlink_bytes/1024:.2f} KB") 
+            # print(f"单轮下行通信量: {downlink_bytes/1024:.2f} KB")
             # print(f"单轮总通信量: {(uplink_bytes+downlink_bytes)/1024:.2f} KB")
             # exit()
-    
+
             # Step 6: 测试
             loss, acc, f1 = self.test_server()
             self.rs_train_loss.append(loss)
             self.rs_glob_acc.append(acc)
             self.rs_glob_f1.append(f1)
 
+        save_path = f"./results/{self.dataset}/loss_server.json"
+        client_loss_all = {}
+        for user in self.selected_users:
+            client_loss_all[user.client_id] = {
+                "ae_loss": user.loss_history,
+                "cf_loss": user.cf_loss_history
+            }
+        all_losses = {
+            "global_losses": self.loss_history,       # AE 与 CF 全局平均损失
+            "global_train_loss": self.rs_train_loss,  # server test loss
+            "global_acc": self.rs_glob_acc,
+            "global_f1": self.rs_glob_f1,
+            "client_losses": client_loss_all          # 每个客户端
+        }
+        with open(save_path, "w") as f:
+            json.dump(all_losses, f, indent=4)
+        print(f"[Saved] Loss JSON => {save_path}")
         # Step 7: 可视化 + 保存
         self.plot_losses(save_dir=f"./results/{self.dataset}/")
         self.plot_client_losses(save_dir=f"./results/{self.dataset}/")
         self.test_clients()
-   
+
         self.save_results()
 
     def plot_losses(self, save_dir):
@@ -514,8 +521,7 @@ class FedProp(Server):
                 plt.close()
 
         print(f"[INFO] Individual client losses saved to {client_save_dir}")
-        
-        
+
         # prototypes
         # total_counts = {}
         # for _, weight_dict in prototypes_weights:
@@ -534,10 +540,9 @@ class FedProp(Server):
         #             global_prototypes[cls] = proto * weight
         #         else:
         #             global_prototypes[cls] += proto * weight
-                    
-    
+
         # =========================================================================================
-    
+
     # def test_server(self):
     #     """服务器端测试集评估"""
     #     self.ae_model_server.eval()

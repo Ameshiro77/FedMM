@@ -5,6 +5,6 @@
 # mhealth opp hapt
 
 python main.py \
-    --dataset opp\
-    --global_rounds 100 \
-    --algo fedprop
+    --dataset mhealth  \
+    --global_rounds 200 \
+    --algo fedprox
