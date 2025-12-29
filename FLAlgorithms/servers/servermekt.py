@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 from FLAlgorithms.servers.serverbase import Server
 from FLAlgorithms.users.usermekt import UserMEKT
-from utils.model_utils import make_seq_batch, get_seg_len, load_data, client_idxs
 from FLAlgorithms.trainmodel.ae_model import SplitLSTMAutoEncoder, MLP
 import numpy as np
 
@@ -11,11 +10,10 @@ class FedMEKT(Server):
     
     def __init__(self, dataset, algorithm, input_sizes, rep_size, n_classes,
                  modalities, batch_size, learning_rate, beta, lamda,
-                 num_glob_iters, local_epochs, optimizer, num_users, times, label_ratio=0.1):
-        
+                 num_glob_iters, local_epochs, optimizer, num_users, times, label_ratio=0.1, pfl=False):
         super().__init__(dataset, algorithm, input_sizes, rep_size, n_classes,
                          modalities, batch_size, learning_rate, beta, lamda,
-                         num_glob_iters, local_epochs, optimizer, num_users, times)
+                         num_glob_iters, local_epochs, optimizer, num_users, times, pfl)
         
         
         # 初始化客户端
@@ -36,11 +34,18 @@ class FedMEKT(Server):
             )
             client_cf = MLP(rep_size, n_classes)
             
-            user = UserMEKT(
-                i, self.clients_train_data_list[i], self.test_data, self.public_data, 
+            if pfl:
+                user = UserMEKT(
+                i, self.clients_train_data_list[i], self.clients_test_data_list[i], self.public_data, 
                 client_ae, client_cf, client_modals, batch_size, learning_rate,
                 beta, lamda, local_epochs
             )
+            else:
+                user = UserMEKT(
+                    i, self.clients_train_data_list[i], self.test_data, self.public_data, 
+                    client_ae, client_cf, client_modals, batch_size, learning_rate,
+                    beta, lamda, local_epochs
+                )
             self.users.append(user)
         
     def train(self):

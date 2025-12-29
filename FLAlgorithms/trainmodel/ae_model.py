@@ -10,7 +10,17 @@ from PIL import Image
 
 Num_neurons = 32
 
+class GradScaler(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, scale):
+        ctx.scale = scale
+        return x
 
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output * ctx.scale, None
+    
+    
 class LSTMEncoder(nn.Module):
     def __init__(self, input_size, representation_size, num_layers=1, batch_first=True):
         super(LSTMEncoder, self).__init__()
@@ -104,7 +114,6 @@ class SplitLSTMAutoEncoder(nn.Module):
             h = h.expand(-1, seq_len, -1)
         return self.decoders[modality](h)
 
-
 class DisentangledLSTMAutoEncoder(nn.Module):
     def __init__(self, input_size, representation_size, shared_size, specific_size, num_layers=1, batch_first=True):
         super(DisentangledLSTMAutoEncoder, self).__init__()
@@ -113,19 +122,21 @@ class DisentangledLSTMAutoEncoder(nn.Module):
                                    representation_size=representation_size,
                                    num_layers=num_layers,
                                    batch_first=batch_first)
-        self.decoder = LSTMDecoder(representation_size=specific_size,
+        
+        # === [修改点 1] 解码器输入维度变了 ===
+        # 以前只有 specific_size，现在是 shared_size + specific_size
+        self.decoder = LSTMDecoder(representation_size=shared_size + specific_size, 
                                    output_size=input_size,
                                    num_layers=num_layers,
                                    batch_first=batch_first)
 
-        # 线性映射：从 encoder 输出得到共享特征和私有特征
         self.fc_share = nn.Linear(representation_size, shared_size)
         self.fc_spec = nn.Linear(representation_size, specific_size)
 
-        # 初始化为正交，鼓励两种特征独立
         nn.init.orthogonal_(self.fc_share.weight)
         nn.init.orthogonal_(self.fc_spec.weight)
 
+    # encode 和 encode_recon 保持不变 ...
     def encode(self, x, modality=None):
         _, out = self.encoder(x)
         z_share = self.fc_share(out)
@@ -134,31 +145,89 @@ class DisentangledLSTMAutoEncoder(nn.Module):
 
     def encode_recon(self, x, modality=None):
         _, out = self.encoder(x)
-        h_last = out[:, -1, :]  # 取最后时间步的隐藏状态
+        h_last = out[:, -1, :]
         z_share = self.fc_share(h_last)
         z_spec = self.fc_spec(h_last)
         return z_share, z_spec, out
-        
-        
-    # def encode(self, x, modality=None):
-    #     # x.shape: (batch_size, seq_len, input_size)
 
-    #     _, out = self.encoder(x)
-    #     h_last = out[:, -1, :]  # 取最后时间步的隐藏状态
-    #     z_share = self.fc_share(h_last)
-    #     z_spec = self.fc_spec(h_last)
-    #     return z_share, z_spec, out
-
-    def decode(self, z_spec, seq_len):
-        z_seq = z_spec.unsqueeze(1).expand(-1, seq_len, -1)
+    # === [修改点 2] decode 函数接收两者并拼接 ===
+    def decode(self, z_share, z_spec, seq_len):
+        # 1. 对 z_share 进行梯度缩放 (0.1 表示只接受 10% 的重构梯度)
+        # 这样 z_share 只学轮廓，不记噪声
+        z_share_scaled = GradScaler.apply(z_share, 1.0)
+        
+        # 2. 拼接 shared 和 specific
+        z_cat = torch.cat([z_share_scaled, z_spec], dim=-1)
+        
+        # 3. 扩展维度送入解码器
+        z_seq = z_cat.unsqueeze(1).expand(-1, seq_len, -1)
         x_recon = self.decoder(z_seq)  # B S D
         return x_recon
 
+    # === [修改点 3] forward 传入 z_share ===
     def forward(self, x, modality=None):
         z_share, z_spec, out = self.encode_recon(x)
         seq_len = x.shape[1]
-        x_recon = self.decode(z_spec, seq_len)
+        
+        # 修改调用方式
+        x_recon = self.decode(z_share, z_spec, seq_len)
+        
         return x_recon, z_share, z_spec
+    
+# class DisentangledLSTMAutoEncoder(nn.Module):
+#     def __init__(self, input_size, representation_size, shared_size, specific_size, num_layers=1, batch_first=True):
+#         super(DisentangledLSTMAutoEncoder, self).__init__()
+
+#         self.encoder = LSTMEncoder(input_size=input_size,
+#                                    representation_size=representation_size,
+#                                    num_layers=num_layers,
+#                                    batch_first=batch_first)
+#         self.decoder = LSTMDecoder(representation_size=specific_size,
+#                                    output_size=input_size,
+#                                    num_layers=num_layers,
+#                                    batch_first=batch_first)
+
+#         # 线性映射：从 encoder 输出得到共享特征和私有特征
+#         self.fc_share = nn.Linear(representation_size, shared_size)
+#         self.fc_spec = nn.Linear(representation_size, specific_size)
+
+#         # 初始化为正交，鼓励两种特征独立
+#         nn.init.orthogonal_(self.fc_share.weight)
+#         nn.init.orthogonal_(self.fc_spec.weight)
+
+#     def encode(self, x, modality=None):
+#         _, out = self.encoder(x)
+#         z_share = self.fc_share(out)
+#         z_spec = self.fc_spec(out)
+#         return z_share, z_spec, out
+
+#     def encode_recon(self, x, modality=None):
+#         _, out = self.encoder(x)
+#         h_last = out[:, -1, :]  # 取最后时间步的隐藏状态
+#         z_share = self.fc_share(h_last)
+#         z_spec = self.fc_spec(h_last)
+#         return z_share, z_spec, out
+        
+        
+#     # def encode(self, x, modality=None):
+#     #     # x.shape: (batch_size, seq_len, input_size)
+
+#     #     _, out = self.encoder(x)
+#     #     h_last = out[:, -1, :]  # 取最后时间步的隐藏状态
+#     #     z_share = self.fc_share(h_last)
+#     #     z_spec = self.fc_spec(h_last)
+#     #     return z_share, z_spec, out
+
+#     def decode(self, z_spec, seq_len):
+#         z_seq = z_spec.unsqueeze(1).expand(-1, seq_len, -1)
+#         x_recon = self.decoder(z_seq)  # B S D
+#         return x_recon
+
+#     def forward(self, x, modality=None):
+#         z_share, z_spec, out = self.encode_recon(x)
+#         seq_len = x.shape[1]
+#         x_recon = self.decode(z_spec, seq_len)
+#         return x_recon, z_share, z_spec
 
 
 # ================================================================================================
@@ -194,3 +263,76 @@ class FusionNet(nn.Module):
         z_list = list(z_dict.values())        # [M * [B, D]]
         fused = sum(w[i] * z_list[i] for i in range(len(z_list)))
         return fused          # [B, D]
+
+import torch
+import torch.nn as nn
+
+class DynamicGatedFusion(nn.Module):
+    def __init__(self, modalities, rep_size, hidden_dim=64):
+        super().__init__()
+        self.modalities = modalities
+        self.num_modalities = len(modalities)
+        self.rep_size = rep_size
+        
+        # 1. 计算总输入维度：所有模态拼接后的长度
+        total_input_dim = self.num_modalities * rep_size
+        
+        # 2. 门控网络
+        self.gate_net = nn.Sequential(
+            nn.Linear(total_input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, self.num_modalities),
+            nn.Softmax(dim=-1)  # 在最后一个维度(模态维度)归一化
+        )
+
+    def forward(self, z_dict):
+
+        try:
+            z_list = [z_dict[m] for m in self.modalities]
+        except KeyError as e:
+            raise KeyError(f"Missing modality key: {e}. Expected: {self.modalities}")
+
+        cat_z = torch.cat(z_list, dim=-1)
+        weights = self.gate_net(cat_z) 
+        stack_z = torch.stack(z_list, dim=-2)
+        weights_expanded = weights.unsqueeze(-1)
+        z_fused = torch.sum(stack_z * weights_expanded, dim=-2)
+        return z_fused
+
+
+class StyleAwareGenerator(nn.Module):
+    def __init__(self, style_dim, n_classes, hidden_dim, content_dim):
+        """
+        style_dim: z_spec 的维度 (通常等于 specific_size)
+        content_dim: z_share 的维度 (通常等于 shared_size/rep_size)
+        """
+        super(StyleAwareGenerator, self).__init__()
+        
+        # 标签嵌入层: 将类别 label 映射为向量
+        self.label_emb = nn.Embedding(n_classes, style_dim)
+        
+        # 生成网络: 输入 (Style噪声 + Label嵌入) -> 输出 (模拟的 z_share)
+        self.net = nn.Sequential(
+            nn.Linear(style_dim * 2, hidden_dim), 
+            nn.BatchNorm1d(hidden_dim),
+            nn.LeakyReLU(0.2, inplace=True),
+            
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.LeakyReLU(0.2, inplace=True),
+            
+            nn.Linear(hidden_dim, content_dim) 
+            # 输出直接对齐 z_share (通常是经过 mean-pooling 后的向量)
+        )
+
+    def forward(self, z_style, labels):
+        # z_style: 从客户端分布采样得到的 [B, style_dim]
+        # labels: [B]
+        
+        c = self.label_emb(labels) # [B, style_dim]
+        
+        # 拼接 风格噪声 和 标签信息
+        x = torch.cat([z_style, c], dim=1) 
+        
+        out = self.net(x)
+        return out

@@ -1,0 +1,5 @@
+fedprop_serverdist_0.1 & \textbf{64.93} & \textbf{60.31} & 58.68 & \textbf{61.31} & 75.35 \\
+fedprop_serverdist_0.3 & 57.36 & 52.84 & \textbf{63.32} & 57.84 & 86.93 \\
+fedprop_serverdist_0.5 & 61.50 & 59.90 & 56.74 & 59.38 & 90.13 \\
+fedprop_serverdist_0.7 & 42.57 & 44.80 & 58.64 & 48.67 & \textbf{95.07} \\
+fedprop_serverdist_0.9 & 58.33 & 59.09 & 58.42 & 58.61 & 83.73 \\

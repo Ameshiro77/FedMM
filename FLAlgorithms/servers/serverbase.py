@@ -5,14 +5,15 @@ import h5py
 import copy
 from torch.utils.data import DataLoader, TensorDataset
 from utils.model_utils import *
-from FLAlgorithms.trainmodel.ae_model import SplitLSTMAutoEncoder, MLP,FusionNet
+from FLAlgorithms.trainmodel.ae_model import SplitLSTMAutoEncoder, MLP, FusionNet, DynamicGatedFusion
 import matplotlib.pyplot as plt
 from FLAlgorithms.config import EVAL_WIN
+
 
 class Server:
     def __init__(self, dataset, algorithm, input_sizes, rep_size, n_classes,
                  modalities, batch_size, learning_rate, beta, lamda,
-                 num_glob_iters, local_epochs, optimizer, num_users, times):
+                 num_glob_iters, local_epochs, optimizer, num_users, times, pfl):
 
         self.dataset = dataset
 
@@ -39,23 +40,34 @@ class Server:
         # ae_model_class_or_dict may be a class or a dict of modules
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-        self.fusionNet = FusionNet(modalities, rep_size).to(self.device)
+        # self.fusionNet = FusionNet(modalities, rep_size).to(self.device)
+        self.fusionNet = DynamicGatedFusion(modalities, rep_size).to(device)
 
         self.rec_loss_fn = nn.MSELoss()
         self.cls_loss_fn = nn.CrossEntropyLoss()
 
         train_data, test_data, public_data = load_data(dataset)
-        self.public_data = split_public(public_data, dataset=dataset, ratio=0.1)
+        self.public_data = split_public(public_data, dataset=dataset, ratio=0.5)
         self.test_data = test_data
 
         # 服务端的train_data全是labeled
         self.server_train_data, self.clients_train_data = split_server_train(train_data, dataset=dataset, ratio=0.1)
-        self.clients_train_data_list = split_clients_train(self.clients_train_data, self.total_users,self.dataset)
+
+        self.pfl = pfl
+        if pfl:
+            self.clients_train_data_list, self.clients_test_data_list = split_clients_train_and_test(
+                self.clients_train_data,
+                self.total_users,
+                self.dataset,
+                test_ratio=0.25
+            )
+        else:
+            self.clients_train_data_list = split_clients_train(self.clients_train_data, self.total_users, self.dataset)
 
         self.modalities_server = [m for m in self.server_train_data if m != "y"]
         self.ae_model_server = SplitLSTMAutoEncoder(input_sizes, rep_size).to(device)
-        # self.cf_model_server = MLP(rep_size*len(self.modalities_server), n_classes).to(device)
-        self.cf_model_server = MLP(rep_size, n_classes).to(device)
+        self.cf_model_server = MLP(rep_size*len(self.modalities_server), n_classes).to(device)
+        # self.cf_model_server = MLP(rep_size, n_classes).to(device)
 
         self.optimizer_ae = torch.optim.Adam(self.ae_model_server.parameters(), lr=learning_rate)
         self.optimizer_cf = torch.optim.Adam(self.cf_model_server.parameters(), lr=learning_rate)
@@ -69,9 +81,55 @@ class Server:
         print_dataset_info(self.clients_train_data, name="Clients Train")
         print_dataset_info(self.public_data, name="Public")
         print_dataset_info(self.test_data, name="Test")
-    
-    
+
         # user逻辑须在子类里
+
+        # ----------------------------
+    # selection & utils (kept mostly same)
+    # ----------------------------
+    # def select_users(self, round, num_users):
+    #     if num_users >= len(self.users):
+    #         print("All users are selected")
+    #         selected = self.users
+    #     else:
+    #         selected = list(np.random.choice(self.users, num_users, replace=False))
+    #     selected.sort(key=lambda u: u.client_id)
+    #     return selected
+    def select_users(self, round, ratio):
+        if ratio >= 1.0:
+            print("All users are selected (ratio >= 1.0)")
+            return sorted(self.users, key=lambda u: u.client_id)
+
+        modality_groups = {}
+        for user in self.users:
+            if isinstance(user.modalities, list):
+                m_key = tuple(sorted(user.modalities))
+            else:
+                m_key = user.modalities
+
+            if m_key not in modality_groups:
+                modality_groups[m_key] = []
+            modality_groups[m_key].append(user)
+
+        selected_users = []
+
+        for m_key, users_in_group in modality_groups.items():
+            n_group = len(users_in_group)
+
+            # 直接用该组总数 * 比例
+            n_select = int(n_group * ratio)
+
+            if n_select == 0 and ratio > 0 and n_group > 0:
+                n_select = 1
+
+            if n_select > 0:
+                selected_indices = np.random.choice(len(users_in_group), n_select, replace=False)
+                selected_subset = [users_in_group[i] for i in selected_indices]
+                selected_users.extend(selected_subset)
+
+        selected_users.sort(key=lambda u: u.client_id)
+
+        return selected_users
 
     def train_ae_public(self, seq_len=100):
         """利用公共数据训练自编码器"""
@@ -99,35 +157,6 @@ class Server:
                 rec_loss.backward()
                 self.optimizer_ae.step()
 
-    # def train_classifier(self):
-    #     """利用有标签数据训练分类器"""
-    #     self.freeze(self.ae_model_server)
-    #     modalities_seq, y_seq = make_seq_batch2(self.server_train_data, self.batch_size, seq_len=100)
-    #     seq_len_batch = modalities_seq[self.modalities_server[0]].shape[1]
-
-    #     idx_end = 0
-    #     while idx_end < seq_len_batch:
-    #         win_len = np.random.randint(16, 32)
-    #         idx_start = idx_end
-    #         idx_end = min(idx_end + win_len, seq_len_batch)
-
-    #         self.optimizer_cf.zero_grad()
-    #         latents = []
-
-    #         # 编码每个模态
-    #         for m in self.modalities_server:
-    #             x_m = torch.from_numpy(modalities_seq[m][:, idx_start:idx_end, :]).float().to(self.device)
-    #             _, hidden_seq = self.ae_model_server.encode(x_m, m)
-    #             latents.append(hidden_seq[:, -1, :])
-            
-    #         latent_cat = torch.cat(latents, dim=1)
-    #         y_batch = torch.from_numpy(y_seq[:, idx_start]).long().to(self.device)
-    #         logits = self.cf_model_server(latent_cat)
-    #         cls_loss = self.cls_loss_fn(logits, y_batch)
-    #         cls_loss.backward()
-    #         self.optimizer_cf.step()
-    #     self.unfreeze(self.ae_model_server)
-    
     def train_classifier(self):
         """利用有标签数据训练分类器"""
         self.freeze(self.ae_model_server)
@@ -141,22 +170,52 @@ class Server:
             idx_end = min(idx_end + win_len, seq_len_batch)
 
             self.optimizer_cf.zero_grad()
-
+            latents = []
 
             # 编码每个模态
-            z_m_all = {}
             for m in self.modalities_server:
                 x_m = torch.from_numpy(modalities_seq[m][:, idx_start:idx_end, :]).float().to(self.device)
                 _, hidden_seq = self.ae_model_server.encode(x_m, m)
-                z_m_all[m] = hidden_seq    # 直接保持与训练阶段一致
-  
-            z_fuse = self.fusionNet(z_m_all)
-            logits = self.cf_model_server(z_fuse)
+                latents.append(hidden_seq)
+
+            latent_cat = torch.cat(latents, dim=-1)
+            # y_batch = torch.from_numpy(y_seq[:, idx_start]).long().to(self.device)
             y_true = torch.from_numpy(y_seq[:, idx_start:idx_end]).to(self.device).flatten().long()
+            logits = self.cf_model_server(latent_cat)
+            print(logits.shape, y_true.shape)
             cls_loss = self.cls_loss_fn(logits, y_true)
             cls_loss.backward()
             self.optimizer_cf.step()
         self.unfreeze(self.ae_model_server)
+
+    # def train_classifier(self):
+    #     """利用有标签数据训练分类器"""
+    #     self.freeze(self.ae_model_server)
+    #     modalities_seq, y_seq = make_seq_batch2(self.server_train_data, self.batch_size, seq_len=100)
+    #     seq_len_batch = modalities_seq[self.modalities_server[0]].shape[1]
+
+    #     idx_end = 0
+    #     while idx_end < seq_len_batch:
+    #         win_len = np.random.randint(16, 32)
+    #         idx_start = idx_end
+    #         idx_end = min(idx_end + win_len, seq_len_batch)
+
+    #         self.optimizer_cf.zero_grad()
+
+    #         # 编码每个模态
+    #         z_m_all = {}
+    #         for m in self.modalities_server:
+    #             x_m = torch.from_numpy(modalities_seq[m][:, idx_start:idx_end, :]).float().to(self.device)
+    #             _, hidden_seq = self.ae_model_server.encode(x_m, m)
+    #             z_m_all[m] = hidden_seq    # 直接保持与训练阶段一致
+
+    #         z_fuse = self.fusionNet(z_m_all)
+    #         logits = self.cf_model_server(z_fuse)
+    #         y_true = torch.from_numpy(y_seq[:, idx_start:idx_end]).to(self.device).flatten().long()
+    #         cls_loss = self.cls_loss_fn(logits, y_true)
+    #         cls_loss.backward()
+    #         self.optimizer_cf.step()
+    #     self.unfreeze(self.ae_model_server)
 
     def get_server_state_dicts(self):
         """返回服务器端 AE 和 CF 模型参数"""
@@ -378,18 +437,6 @@ class Server:
     def model_exists(self):
         return os.path.exists(os.path.join("models", self.dataset, "server.pt"))
 
-    # ----------------------------
-    # selection & utils (kept mostly same)
-    # ----------------------------
-    def select_users(self, round, num_users):
-        if num_users >= len(self.users):
-            print("All users are selected")
-            selected = self.users
-        else:
-            selected = list(np.random.choice(self.users, num_users, replace=False))
-        selected.sort(key=lambda u: u.client_id)
-        return selected
-
     def train(self):
         for glob_iter in range(self.num_glob_iters):
             print("-------------Round number: ", glob_iter, " -------------")
@@ -400,10 +447,10 @@ class Server:
 
         pass
 
-    def test_clients(self):
+    def test_clients(self, save=False):
         client_accs = []
         modality_accs = {}   # {mod_name: [acc1, acc2, ...]}
-   
+
         for c in self.users:
             acc, _ = c.test()
             print(f"→ client {c.client_id} done, acc={acc:.4f}", flush=True)
@@ -426,68 +473,19 @@ class Server:
             "avg_client_acc": avg_client_acc,
             "avg_modality_acc": avg_modality_acc
         }
-        with open(f"results/{self.dataset}/{self.algorithm}_clients_accs.json", "w") as f:
-            import json
-            json.dump(results, f, indent=2)
+
+        if save:
+            if self.pfl:
+                os.makedirs(f"results/pfl/{self.dataset}", exist_ok=True)
+                with open(f"results/pfl/{self.dataset}/{self.algorithm}_clients_accs.json", "w") as f:
+                    import json
+                    json.dump(results, f, indent=2)
+            else:
+                with open(f"results/{self.dataset}/{self.algorithm}_clients_accs.json", "w") as f:
+                    import json
+                    json.dump(results, f, indent=2)
         return client_accs, avg_client_acc, avg_modality_acc
 
-    
-    # def test_server(self):
-    #     """服务器端测试集评估"""
-    #     self.ae_model_server.eval()
-    #     self.cf_model_server.eval()
-
-    #     total_loss, total_correct, total_samples = 0.0, 0, 0
-    #     eval_win = EVAL_WIN
-    #     # 添加F1 Score计算所需的变量
-    #     all_preds = []
-    #     all_labels = []
-
-    #     with torch.no_grad():
-    #         for start in range(0, len(self.test_data["y"]) - eval_win + 1, eval_win):
-    #             batch_x = {
-    #                 m: torch.tensor(
-    #                     self.test_data[m][start:start + eval_win],
-    #                     dtype=torch.float32, device=self.device
-    #                 ).unsqueeze(0)
-    #                 for m in self.modalities_server
-    #             }
-    #             batch_y = torch.tensor(
-    #                 self.test_data["y"][start:start + eval_win],
-    #                 dtype=torch.long, device=self.device
-    #             )
-
-    #             reps = []
-    #             for m in self.modalities_server:
-    #                 _, hidden_seq = self.ae_model_server.encode(batch_x[m], m)
-    #                 reps.append(hidden_seq.squeeze(0))
-
-    #             reps_cat = torch.cat(reps, dim=-1)
-    #             outputs = self.cf_model_server(reps_cat)
-
-    #             loss = self.cls_loss_fn(outputs, batch_y)
-    #             preds = torch.argmax(outputs, dim=1)
-
-    #             total_loss += loss.item() * batch_y.size(0)
-    #             total_correct += (preds == batch_y).sum().item()
-    #             total_samples += batch_y.size(0)
-                
-    #             # 收集预测结果和真实标签
-    #             all_preds.append(preds.cpu())
-    #             all_labels.append(batch_y.cpu())
-
-
-    #     all_preds = torch.cat(all_preds)
-    #     all_labels = torch.cat(all_labels)
-    #     from sklearn.metrics import f1_score
-    #     f1 = f1_score(all_labels.numpy(), all_preds.numpy(), average='weighted')  # 对于多分类使用加权平均
-        
-    #     avg_loss = total_loss / total_samples
-    #     avg_acc = total_correct / total_samples
-
-    #     print(f"Server Test - Loss: {avg_loss:.4f}, Accuracy: {avg_acc:.4f}, F1 Score: {f1:.4f}")
-    #     return avg_loss, avg_acc, f1
-    
     def test_server(self):
         """服务器端测试集评估"""
         self.ae_model_server.eval()
@@ -513,15 +511,13 @@ class Server:
                     dtype=torch.long, device=self.device
                 )
 
-                z_m_all = {}
+                reps = []
                 for m in self.modalities_server:
-                    _, hidden_seq = self.ae_model_server.encode(batch_x[m], m)  
-                    # hidden_seq: [1, T, D]
-                    z_m_all[m] = hidden_seq    # 直接保持与训练阶段一致
+                    _, hidden_seq = self.ae_model_server.encode(batch_x[m], m)
+                    reps.append(hidden_seq.squeeze(0))
 
-      
-                z_fuse = self.fusionNet(z_m_all)
-                outputs = self.cf_model_server(z_fuse)
+                reps_cat = torch.cat(reps, dim=-1)
+                outputs = self.cf_model_server(reps_cat)
 
                 loss = self.cls_loss_fn(outputs, batch_y)
                 preds = torch.argmax(outputs, dim=1)
@@ -529,17 +525,16 @@ class Server:
                 total_loss += loss.item() * batch_y.size(0)
                 total_correct += (preds == batch_y).sum().item()
                 total_samples += batch_y.size(0)
-                
+
                 # 收集预测结果和真实标签
                 all_preds.append(preds.cpu())
                 all_labels.append(batch_y.cpu())
-
 
         all_preds = torch.cat(all_preds)
         all_labels = torch.cat(all_labels)
         from sklearn.metrics import f1_score
         f1 = f1_score(all_labels.numpy(), all_preds.numpy(), average='weighted')  # 对于多分类使用加权平均
-        
+
         avg_loss = total_loss / total_samples
         avg_acc = total_correct / total_samples
 
@@ -603,11 +598,14 @@ class Server:
                     torch.nn.init.zeros_(param.data)
 
     def save_results(self):
-        save_dir = os.path.join("results", self.dataset)
+        if not self.pfl:
+            save_dir = os.path.join("results", self.dataset)
+        else:
+            save_dir = os.path.join("results/pfl", self.dataset)
         os.makedirs(save_dir, exist_ok=True)
 
         save_path = os.path.join(save_dir, f"{self.algorithm}.svg")
-        
+
         # 新增：保存精度数据到 JSON 文件
         json_save_path = os.path.join(save_dir, f"{self.algorithm}_acc.json")
         acc_data = {
@@ -620,7 +618,7 @@ class Server:
         }
         with open(json_save_path, 'w') as f:
             json.dump(acc_data, f, indent=2)
-        
+
         print(f"Accuracy data saved to {json_save_path}")
 
         rounds = list(range(1, len(self.rs_glob_acc) + 1))

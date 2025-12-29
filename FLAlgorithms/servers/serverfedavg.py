@@ -16,10 +16,10 @@ import sys
 class FedAvg(Server):
     def __init__(self, dataset, algorithm, input_sizes, rep_size, n_classes,
                  modalities, batch_size, learning_rate, beta, lamda,
-                 num_glob_iters, local_epochs, optimizer, num_users, times, label_ratio=0.1):
+                 num_glob_iters, local_epochs, optimizer, num_users, times, label_ratio=0.1, pfl=False):
         super().__init__(dataset, algorithm, input_sizes, rep_size, n_classes,
                          modalities, batch_size, learning_rate, beta, lamda,
-                         num_glob_iters, local_epochs, optimizer, num_users, times)
+                         num_glob_iters, local_epochs, optimizer, num_users, times, pfl)
 
         self.total_users = len(modalities)
 
@@ -37,10 +37,16 @@ class FedAvg(Server):
                 representation_size=rep_size
             )
             client_cf = MLP(rep_size, n_classes)
-            user = UserFedAvg(
-                i, self.clients_train_data_list[i], self.test_data, self.public_data, client_ae, client_cf,
+            if pfl:
+                user = UserFedAvg(
+                i, self.clients_train_data_list[i], self.clients_test_data_list[i], self.public_data, client_ae, client_cf,
                 client_modals, batch_size, learning_rate, beta, lamda,
                 local_epochs, label_ratio=label_ratio)
+            else:
+                user = UserFedAvg(
+                    i, self.clients_train_data_list[i], self.test_data, self.public_data, client_ae, client_cf,
+                    client_modals, batch_size, learning_rate, beta, lamda,
+                    local_epochs, label_ratio=label_ratio)
             print("client", i, "modals:", client_modals)
             self.users.append(user)
 
@@ -75,7 +81,7 @@ class FedAvg(Server):
             # total_uplink_bytes = 0
             # total_downlink_bytes = 0
             
-            # 计算总通信量（假设每轮通信量相同）
+            # # 计算总通信量（假设每轮通信量相同）
             # server_ae_params = self.ae_model_server.state_dict()
             # one_round_downlink = sum(param.numel() * 4 for param in server_ae_params.values())
             # one_round_uplink = 0

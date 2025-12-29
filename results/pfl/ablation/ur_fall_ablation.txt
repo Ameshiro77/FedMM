@@ -1,0 +1,4 @@
+fedprop & \textbf{58.39} & \textbf{61.73} & 55.81 & \textbf{58.64} & \textbf{79.71} \\
+wo_client_align & 50.86 & 44.99 & 56.08 & 50.65 & 65.77 \\
+wo_client_dyn & 55.32 & 45.60 & 54.99 & 51.97 & 70.71 \\
+wo_server_dist & 53.67 & 60.42 & \textbf{60.61} & 58.23 & 79.50 \\

@@ -14,15 +14,26 @@ N_DIV_OPP = 100
 N_DIV_MHEALTH = 100
 N_DIV_URFALL = 10
 N_DIV_HAPT = 100
+N_DIV_PAMAM2 = 100
 N_LABEL_DIV_OPP = 30
 N_LABEL_DIV_MHEALTH = 30
 N_LABEL_DIV_URFALL = 30
 N_LABEL_DIV_HAPT = 30
+N_LABEL_DIV_HAPT = 30
+
+def get_data_size_mb(data_dict):
+    total_bytes = 0
+    for k, v in data_dict.items():
+        if hasattr(v, "nbytes"):
+            total_bytes += v.nbytes
+    return total_bytes / (1024 ** 2)
 
 def load_data(dataset):
     data = dataset
     if data == "opp":
         mat_data = loadmat(os.path.join(data_path, "opp", "opp.mat"))
+        # print(mat_data.keys())
+        # exit()
         
         modalities = ["acce", "gyro"]
          
@@ -39,53 +50,106 @@ def load_data(dataset):
         
         
         return (data_train, data_test, data_public)
+    
+    # elif data == "mhealth":
+    #     modalities = ["acce", "gyro", "mage"]
+    #     mat_data = loadmat(os.path.join(data_path, "mhealth", "mhealth.mat"))
 
+    #     s_test = np.random.randint(1, 11)
+    #     s_public = np.random.choice([i for i in range(1, 11) if i != s_test])
+
+    #     data_train = {m: [] for m in modalities}
+    #     data_train["y"] = []
+
+    #     data_test = {}
+    #     data_public = {}
+
+    #     for i in range(1, 11):
+    #         subject_data = {m: zscore(mat_data[f"s{i}_{m}"]) for m in modalities}
+    #         subject_label = np.squeeze(mat_data[f"s{i}_y"])
+
+    #         if i == s_test:
+    #             data_test = subject_data
+    #             data_test["y"] = subject_label
+    #         elif i == s_public:
+    #             data_public = subject_data
+    #             data_public["y"] = subject_label
+    #         else:
+    #             for m in modalities:
+    #                 data_train[m].append(subject_data[m])
+    #             data_train["y"].append(subject_label)
+
+    #     # 拼接训练集
+    #     for m in modalities:
+    #         data_train[m] = np.concatenate(data_train[m])
+    #     # data_train["y"] = np.squeeze(np.concatenate(data_train["y"], axis=1))
+    #     data_train["y"] = np.squeeze(np.concatenate(data_train["y"]))
+    #     print(data_train['acce'].shape)
+       
+    #     return data_train, data_test, data_public
     elif data == "mhealth":
         modalities = ["acce", "gyro", "mage"]
         mat_data = loadmat(os.path.join(data_path, "mhealth", "mhealth.mat"))
 
-        s_test = np.random.randint(1, 11)
-        s_public = np.random.choice([i for i in range(1, 11) if i != s_test])
+        # --- [修改 1: 划分逻辑] ---
+        all_subjects = list(range(1, 11))
+        
+        # 测试集取 2个 (增加稳定性)
+        s_test = np.random.choice(all_subjects, 2, replace=False) 
+        
+        remain = [i for i in all_subjects if i not in s_test]
+        
+        # 公共集只取 1个 (响应你的要求)
+        s_public = np.random.choice(remain, 1, replace=False)
+        
+        # 剩下的 7个 都是训练集
+        # ------------------------
 
-        data_train = {m: [] for m in modalities}
-        data_train["y"] = []
-
-        data_test = {}
-        data_public = {}
+        # --- [修改 2: 初始化逻辑 (改为list)] ---
+        data_train = {m: [] for m in modalities}; data_train["y"] = []
+        data_test = {m: [] for m in modalities};  data_test["y"] = []
+        data_public = {m: [] for m in modalities}; data_public["y"] = []
 
         for i in range(1, 11):
             subject_data = {m: zscore(mat_data[f"s{i}_{m}"]) for m in modalities}
             subject_label = np.squeeze(mat_data[f"s{i}_y"])
 
-            if i == s_test:
-                data_test = subject_data
-                data_test["y"] = subject_label
-            elif i == s_public:
-                data_public = subject_data
-                data_public["y"] = subject_label
+            # 使用 in 判断 (兼容单个或多个)
+            if i in s_test:
+                for m in modalities: data_test[m].append(subject_data[m])
+                data_test["y"].append(subject_label)
+            elif i in s_public:
+                for m in modalities: data_public[m].append(subject_data[m])
+                data_public["y"].append(subject_label)
             else:
-                for m in modalities:
-                    data_train[m].append(subject_data[m])
+                for m in modalities: data_train[m].append(subject_data[m])
                 data_train["y"].append(subject_label)
 
-        # 拼接训练集
+        # --- [修改 3: 拼接逻辑] ---
         for m in modalities:
             data_train[m] = np.concatenate(data_train[m])
-        # data_train["y"] = np.squeeze(np.concatenate(data_train["y"], axis=1))
+            # 必须判断非空，否则 concatenate 空列表会报错
+            if len(data_test[m]) > 0: data_test[m] = np.concatenate(data_test[m])
+            if len(data_public[m]) > 0: data_public[m] = np.concatenate(data_public[m])
+            
         data_train["y"] = np.squeeze(np.concatenate(data_train["y"]))
-        print(data_train['acce'].shape)
-       
+        if len(data_test["y"]) > 0: data_test["y"] = np.squeeze(np.concatenate(data_test["y"]))
+        if len(data_public["y"]) > 0: data_public["y"] = np.squeeze(np.concatenate(data_public["y"]))
+        
+        print(f"MHealth Split -> Train: {len(data_train['y'])}, Test: {len(data_test['y'])}, Public: {len(data_public['y'])}")
         return data_train, data_test, data_public
     
     elif data == "hapt":
         modalities = ["acce", "gyro"]
         mat_data = loadmat(os.path.join(data_path, "hapt", "hapt.mat"))
-
+        # print(mat_data.keys())
+        # exit()
         all_subjects = list(range(1, 31))  # HAPT 共30个受试者
-        s_test = np.random.choice(all_subjects, size=9, replace=False)  # 测试 9人
+        # s_test = np.random.choice(all_subjects, size=9, replace=False)  # 测试 9人
+        s_test = np.random.choice(all_subjects, size=6, replace=False)   #test 6
         remain = [i for i in all_subjects if i not in s_test]
         s_public = np.random.choice(remain, size=3, replace=False)       # 公共 3人
-        s_train = [i for i in remain if i not in s_public]               # 剩余 18 训练
+        s_train = [i for i in remain if i not in s_public]               # 剩余训练
 
         print(f"Train: {len(s_train)} subjects, Test: {len(s_test)}, Public: {len(s_public)}")
 
@@ -176,10 +240,10 @@ def load_data(dataset):
 
         # 受试者编号范围：1~30
         all_subjects = list(range(1, 31))
-        s_test = np.random.choice(all_subjects, size=9, replace=False)  # 9名测试
+        s_test = np.random.choice(all_subjects, size=8, replace=False)  # X名测试
         remain = [i for i in all_subjects if i not in s_test]
         s_public = np.random.choice(remain, size=3, replace=False)       # 3名公共数据
-        s_train = [i for i in remain if i not in s_public]               # 剩余 18 训练
+        s_train = [i for i in remain if i not in s_public]               # 剩余 X 训练
 
         print(f"Train: {len(s_train)} subjects, Test: {len(s_test)}, Public: {len(s_public)}")
 
@@ -229,79 +293,112 @@ def load_data(dataset):
         return data_train, data_test, data_public
 
     elif data == "ur_fall":
-        modalities = ["acce", "rgb", "depth"]
-        mat_data = loadmat(os.path.join(data_path, "ur_fall", "ur_fall.mat"))
+            modalities = ["acce", "rgb", "depth"]
+            mat_data = loadmat(os.path.join(data_path, "ur_fall", "ur_fall.mat"))
 
-        # 随机选择 fall/ADL 测试集
-        fall_test = np.random.choice(range(1, 31), 3, replace=False)
-        adl_test = np.random.choice(range(1, 41), 4, replace=False)
+            # 1. 增大测试集 (20%)
+            # Fall (30人): 选6个测试
+            fall_test = np.random.choice(range(1, 31), 5, replace=False)
+            # ADL (40人): 选8个测试
+            adl_test = np.random.choice(range(1, 41), 5, replace=False)
 
-        # 随机选择 fall/ADL 公共数据
-        fall_public = np.random.choice([i for i in range(1, 31) if i not in fall_test], 3, replace=False)
-        adl_public = np.random.choice([i for i in range(1, 41) if i not in adl_test], 4, replace=False)
+            # 2. 缩小公共集 (约5%)，为了留更多数据给训练
+            fall_remain = [i for i in range(1, 31) if i not in fall_test]
+            # 从剩下的里面选2个做公共
+            fall_public = np.random.choice(fall_remain, 2, replace=False) 
+            
+            adl_remain = [i for i in range(1, 41) if i not in adl_test]
+            # 从剩下的里面选2个做公共
+            adl_public = np.random.choice(adl_remain, 2, replace=False)
 
-        # 初始化训练集、测试集、公共数据
-        data_train = {m: [] for m in modalities}
-        data_train["y"] = []
-        data_test = {}
-        data_public = {}
+            data_train = {m: [] for m in modalities}; data_train["y"] = []
+            data_test = {m: [] for m in modalities};  data_test["y"] = []
+            data_public = {m: [] for m in modalities}; data_public["y"] = []
 
-        a_data = {m: mat_data[m] for m in modalities}
-        a_y = mat_data["y"]
+            a_data = {m: mat_data[m] for m in modalities}
+            a_y = mat_data["y"]
 
-        # 处理 fall 数据
-        for i in range(1, 31):
-            subject_data = {}
-            for m in modalities:
-                sub_m = a_data[m][(a_data[m][:, 0] == 1) & (a_data[m][:, 1] == i), :]
-                if m in ["acce", "depth"]:
-                    sub_m[:, 3:] = zscore(sub_m[:, 3:])
-                subject_data[m] = sub_m[:, 3:]
-            subject_label = a_y[(a_y[:, 0] == 1) & (a_y[:, 1] == i), 3]
-
-            if i in fall_test:
-                data_test.update(subject_data)
-                data_test["y"] = subject_label
-            elif i in fall_public:
-                data_public.update(subject_data)
-                data_public["y"] = subject_label
-            else:
+            # 处理 Fall (1-30)
+            for i in range(1, 31):
+                subject_data = {}
                 for m in modalities:
-                    data_train[m].append(subject_data[m])
-                data_train["y"].append(subject_label)
+                    # 筛选条件: Fall=1, Subject=i
+                    sub_m = a_data[m][(a_data[m][:, 0] == 1) & (a_data[m][:, 1] == i), :]
+                    if m in ["acce", "depth"]:
+                        sub_m[:, 3:] = zscore(sub_m[:, 3:]) # 归一化
+                    subject_data[m] = sub_m[:, 3:]          # 截取特征
+                
+                subject_label = a_y[(a_y[:, 0] == 1) & (a_y[:, 1] == i), 3]
 
-        # 处理 ADL 数据
-        for i in range(1, 41):
-            subject_data = {}
-            for m in modalities:
-                sub_m = a_data[m][(a_data[m][:, 0] == 0) & (a_data[m][:, 1] == i), :]
-                if m in ["acce", "depth"]:
-                    sub_m[:, 3:] = zscore(sub_m[:, 3:])
-                subject_data[m] = sub_m[:, 3:]
-            subject_label = a_y[(a_y[:, 0] == 0) & (a_y[:, 1] == i), 3]
+                if i in fall_test:
+                    for m in modalities: data_test[m].append(subject_data[m])
+                    data_test["y"].append(subject_label)
+                elif i in fall_public:
+                    for m in modalities: data_public[m].append(subject_data[m])
+                    data_public["y"].append(subject_label)
+                else:
+                    for m in modalities: data_train[m].append(subject_data[m])
+                    data_train["y"].append(subject_label)
 
-            if i in adl_test:
-                data_test.update(subject_data)
-                data_test["y"] = subject_label
-            elif i in adl_public:
-                data_public.update(subject_data)
-                data_public["y"] = subject_label
-            else:
+            # 处理 ADL (1-40)
+            for i in range(1, 41):
+                subject_data = {}
                 for m in modalities:
-                    data_train[m].append(subject_data[m])
-                data_train["y"].append(subject_label)
+                    # 筛选条件: Fall=0, Subject=i
+                    sub_m = a_data[m][(a_data[m][:, 0] == 0) & (a_data[m][:, 1] == i), :]
+                    if m in ["acce", "depth"]:
+                        sub_m[:, 3:] = zscore(sub_m[:, 3:])
+                    subject_data[m] = sub_m[:, 3:]
+                
+                subject_label = a_y[(a_y[:, 0] == 0) & (a_y[:, 1] == i), 3]
 
-        # 拼接训练集
-        for m in modalities:
-            data_train[m] = np.concatenate(data_train[m])
-        data_train["y"] = np.squeeze(np.concatenate(data_train["y"]))
+                if i in adl_test:
+                    for m in modalities: data_test[m].append(subject_data[m])
+                    data_test["y"].append(subject_label)
+                elif i in adl_public:
+                    for m in modalities: data_public[m].append(subject_data[m])
+                    data_public["y"].append(subject_label)
+                else:
+                    for m in modalities: data_train[m].append(subject_data[m])
+                    data_train["y"].append(subject_label)
 
-        return data_train, data_test, data_public
+            # 拼接数据
+            for d in [data_train, data_test, data_public]:
+                for m in modalities:
+                    if len(d[m]) > 0: d[m] = np.concatenate(d[m])
+                if len(d["y"]) > 0: d["y"] = np.squeeze(np.concatenate(d["y"]))
+
+    return data_train, data_test, data_public
 
 # ----- split ------
 # 返回服务端数据和客户端数据
 def split_server_train(data_train, dataset, ratio=0.1):
+    
     y_train = data_train["y"]
+
+    if dataset == "ur_fall":
+        n_total = len(y_train)
+        n_server = int(n_total * 0.25) 
+        server_train = {}
+        client_train = {}
+
+        for m in data_train:
+            if m != "y":
+                # 【关键修改】使用切片 [:n_server]，保持时序连续
+                server_train[m] = data_train[m][:n_server]
+        
+        server_train["y"] = y_train[:n_server]
+
+        # Client 获取全部数据 (根据你原本的逻辑)
+        for m in data_train:
+            if m != "y":
+                client_train[m] = data_train[m] 
+        client_train["y"] = y_train
+
+        print(f"UR_FALL Split (Sequential): Server gets {len(server_train['y'])} (First {n_server} samples), Client gets {len(client_train['y'])} (Full)")
+        return server_train, client_train
+        
+
     server_train = {m: np.empty((0, data_train[m].shape[1]))
                     for m in data_train if m != "y"}
     server_train["y"] = np.empty((0,))
@@ -317,6 +414,8 @@ def split_server_train(data_train, dataset, ratio=0.1):
     elif dataset == "ur_fall":
         n_div = N_LABEL_DIV_URFALL
     elif dataset == "hapt":
+        n_div = N_LABEL_DIV_HAPT
+    elif dataset == "pamap2":
         n_div = N_LABEL_DIV_HAPT
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
@@ -346,48 +445,181 @@ def split_server_train(data_train, dataset, ratio=0.1):
 
 
 # split data with CLIENTS DATA (NO SERVER)
+
 def split_clients_train(data_train, num_clients, dataset="default", overlap_ratio=0.3):
     """
     划分客户端数据集
-    - data_train: dict, 每个模态和标签
-    - num_clients: 客户端数量
-    - dataset: 数据集名称，如果是 'ur_fall' 则允许重叠
-    - overlap_ratio: 重叠比例（ur_fall专用）
+    - 针对 ur_fall: 硬编码使用 80% 数据长度进行随机采样 (强制重叠)
+    - 其他数据集: 均分 (不重叠)
     """
     y_train = data_train["y"]
     n_row = len(y_train)
     client_train_list = []
 
     if dataset == "ur_fall":
-        # ur_fall 允许客户端之间有重叠
-        seg_len = n_row // num_clients
-        overlap_len = int(seg_len * overlap_ratio)
+        seg_len = int(n_row * 0.8) 
+        
+        if seg_len < 10: 
+            seg_len = int(n_row * 0.5)
 
-        start_idx = 0
+        max_start = n_row - seg_len
+        if max_start < 0: max_start = 0
+
         for i in range(num_clients):
+            if max_start > 0:
+                start_idx = np.random.randint(0, max_start)
+            else:
+                start_idx = 0
+            
             end_idx = start_idx + seg_len
-            # 防止越界
-            if end_idx > n_row:
-                end_idx = n_row
+            
+            # 切分
             client_data = {m: data_train[m][start_idx:end_idx] for m in data_train if m != "y"}
             client_data["y"] = y_train[start_idx:end_idx]
             client_train_list.append(client_data)
 
-            # 下一客户端起始点前移一部分，实现重叠
-            start_idx = start_idx + seg_len - overlap_len
-            if start_idx >= n_row:
-                start_idx = n_row - seg_len  # 最后一个客户端保证长度
+
     else:
-        # 默认无重叠
-        seg_len = n_row // num_clients
+        seg_len = n_row // num_clients        
         for i in range(num_clients):
             start = i * seg_len
             end = (i + 1) * seg_len if i < num_clients - 1 else n_row
+            
             client_data = {m: data_train[m][start:end] for m in data_train if m != "y"}
             client_data["y"] = y_train[start:end]
             client_train_list.append(client_data)
 
     return client_train_list
+
+# split data with CLIENTS DATA (NO SERVER)
+def split_clients_train_and_test(data_train, num_clients, dataset="default", 
+                                 overlap_ratio=0.3, test_ratio=0.2):
+    """
+    与 split_clients_train 完全统一逻辑，
+    先切客户端数据（重叠 or 不重叠），再在每个客户端内部切分 train/test。
+    """
+
+    y_train = data_train["y"]
+    n_row = len(y_train)
+
+    client_train_list = []
+    client_test_list = []
+
+    if dataset == "ur_fall":
+
+        seg_len = int(n_row * 0.8)
+        if seg_len < 10:
+            seg_len = int(n_row * 0.5)
+
+        max_start = n_row - seg_len
+        if max_start < 0:
+            max_start = 0
+
+        for i in range(num_clients):
+
+            # --- 与第一个函数一致的随机起点 ---
+            if max_start > 0:
+                start_idx = np.random.randint(0, max_start)
+            else:
+                start_idx = 0
+
+            end_idx = start_idx + seg_len
+
+            # --- 获取这个客户端的数据 ---
+            c_data_all = {
+                m: data_train[m][start_idx:end_idx].copy()
+                for m in data_train if m != "y"
+            }
+            c_y_all = y_train[start_idx:end_idx].copy()
+
+            # --- 内部分 train / test (按时序) ---
+            n_local = len(c_y_all)
+            n_test = int(n_local * test_ratio)
+            n_train = n_local - n_test
+
+            c_train = {m: c_data_all[m][:n_train] for m in c_data_all}
+            c_train["y"] = c_y_all[:n_train]
+
+            c_test = {m: c_data_all[m][n_train:] for m in c_data_all}
+            c_test["y"] = c_y_all[n_train:]
+
+            client_train_list.append(c_train)
+            client_test_list.append(c_test)
+
+
+    else:
+        seg_len = n_row // num_clients
+
+        for i in range(num_clients):
+            start = i * seg_len
+            end = (i + 1) * seg_len if i < num_clients - 1 else n_row
+
+            # --- 获取这个客户端的数据 ---
+            c_data_all = {
+                m: data_train[m][start:end].copy()
+                for m in data_train if m != "y"
+            }
+            c_y_all = y_train[start:end].copy()
+
+            # --- 内部分 train / test (按时序) ---
+            n_local = len(c_y_all)
+            n_test = int(n_local * test_ratio)
+            n_train = n_local - n_test
+
+            c_train = {m: c_data_all[m][:n_train] for m in c_data_all}
+            c_train["y"] = c_y_all[:n_train]
+
+            c_test = {m: c_data_all[m][n_train:] for m in c_data_all}
+            c_test["y"] = c_y_all[n_train:]
+
+            client_train_list.append(c_train)
+            client_test_list.append(c_test)
+
+    return client_train_list, client_test_list
+
+
+# def split_clients_train(data_train, num_clients, dataset="default", overlap_ratio=0.3):
+#     """
+#     划分客户端数据集
+#     - data_train: dict, 每个模态和标签
+#     - num_clients: 客户端数量
+#     - dataset: 数据集名称，如果是 'ur_fall' 则允许重叠
+#     - overlap_ratio: 重叠比例（ur_fall专用）
+#     """
+#     y_train = data_train["y"]
+#     n_row = len(y_train)
+#     client_train_list = []
+
+#     if dataset == "ur_fall":
+#         # ur_fall 允许客户端之间有重叠
+#         seg_len = n_row // num_clients
+#         overlap_len = int(seg_len * overlap_ratio)
+
+#         start_idx = 0
+#         for i in range(num_clients):
+#             end_idx = start_idx + seg_len
+#             # 防止越界
+#             if end_idx > n_row:
+#                 end_idx = n_row
+#             client_data = {m: data_train[m][start_idx:end_idx] for m in data_train if m != "y"}
+#             client_data["y"] = y_train[start_idx:end_idx]
+#             client_train_list.append(client_data)
+
+#             # 下一客户端起始点前移一部分，实现重叠
+#             start_idx = start_idx + seg_len - overlap_len
+#             if start_idx >= n_row:
+#                 start_idx = n_row - seg_len  # 最后一个客户端保证长度
+#     else:
+#         # 默认无重叠
+#         seg_len = n_row // num_clients
+#         for i in range(num_clients):
+#             start = i * seg_len
+#             end = (i + 1) * seg_len if i < num_clients - 1 else n_row
+#             client_data = {m: data_train[m][start:end] for m in data_train if m != "y"}
+#             client_data["y"] = y_train[start:end]
+#             client_train_list.append(client_data)
+
+#     return client_train_list
 
 
 # 拿多少公共数据合适
@@ -404,6 +636,8 @@ def split_public(data_public, dataset="opp", ratio=1.):
     elif dataset == "ur_fall":
         n_div = N_LABEL_DIV_URFALL
     elif dataset == "hapt":
+        n_div = N_LABEL_DIV_HAPT
+    elif dataset == "pamap2":
         n_div = N_LABEL_DIV_HAPT
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
@@ -446,7 +680,13 @@ def make_seq_batch2(data, batch_size, seq_len=100):
 
 
   
-    indices_start = np.random.choice(max_start, batch_size, replace=False)
+    replace = False
+    if batch_size > max_start:
+        print(f"Warning: batch_size ({batch_size}) > max_start ({max_start}). Switching to replace=True.")
+        replace = True
+        
+    indices_start = np.random.choice(max_start, batch_size, replace=replace)
+    
     modalities_seq = {
         m: np.zeros((batch_size, seq_len, input_sizes[m]), dtype=np.float32)
         for m in modalities
@@ -499,41 +739,41 @@ def make_seq_batch(dataset, seg_idxs, seg_len, batch_size):
     return modalities_seq, y_seq
 
 
-def client_idxs(data_train, dataset, num_clients):
-    n_samples = len(data_train["y"])
-    DATASET = dataset
-    if DATASET == "opp":
-        n_div = N_DIV_OPP
-    elif DATASET == "mhealth":
-        n_div = N_DIV_MHEALTH
-    elif DATASET == "ur_fall":
-        n_div = N_DIV_URFALL
-    # each client has (n_samples * train_ratio) data
-    train_ratio = TRAIN_RATIO
+# def client_idxs(data_train, dataset, num_clients):
+#     n_samples = len(data_train["y"])
+#     DATASET = dataset
+#     if DATASET == "opp":
+#         n_div = N_DIV_OPP
+#     elif DATASET == "mhealth":
+#         n_div = N_DIV_MHEALTH
+#     elif DATASET == "ur_fall":
+#         n_div = N_DIV_URFALL
+#     # each client has (n_samples * train_ratio) data
+#     train_ratio = TRAIN_RATIO
 
-    len_div = int(n_samples // n_div) 
-    len_seg = get_seg_len(n_samples, dataset)
-    starts_div = np.arange(0, n_samples-len_div, len_div)
-    idxs_clients = []
-    for i in range(num_clients):
-        idxs_clients.append(np.array([]).astype(np.int64))
-        for start in starts_div:
-            idxs_in_div = np.arange(start, start + len_div - len_seg)
-            idxs_clients[i] = np.append(
-                idxs_clients[i], np.random.choice(idxs_in_div))
-    return idxs_clients
+#     len_div = int(n_samples // n_div) 
+#     len_seg = get_seg_len(n_samples, dataset)
+#     starts_div = np.arange(0, n_samples-len_div, len_div)
+#     idxs_clients = []
+#     for i in range(num_clients):
+#         idxs_clients.append(np.array([]).astype(np.int64))
+#         for start in starts_div:
+#             idxs_in_div = np.arange(start, start + len_div - len_seg)
+#             idxs_clients[i] = np.append(
+#                 idxs_clients[i], np.random.choice(idxs_in_div))
+#     return idxs_clients
 
 
-def get_seg_len(n_samples, dataset):
-    DATASET = dataset
-    train_ratio = TRAIN_RATIO
-    if DATASET == "opp":
-        n_div = N_DIV_OPP
-    elif DATASET == "mhealth":
-        n_div = N_DIV_MHEALTH
-    elif DATASET == "ur_fall":
-        n_div = N_DIV_URFALL
-    return int(n_samples * float(train_ratio)//n_div)
+# def get_seg_len(n_samples, dataset):
+#     DATASET = dataset
+#     train_ratio = TRAIN_RATIO
+#     if DATASET == "opp":
+#         n_div = N_DIV_OPP
+#     elif DATASET == "mhealth":
+#         n_div = N_DIV_MHEALTH
+#     elif DATASET == "ur_fall":
+#         n_div = N_DIV_URFALL
+#     return int(n_samples * float(train_ratio)//n_div)
 # ==========================================================
 
 

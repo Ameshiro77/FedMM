@@ -1,0 +1,10 @@
+fedprop_serverdist_0.1 & 69.53 & 77.83 & 73.68 & 79.61 \\
+fedprop_serverdist_0.2 & 81.47 & 74.54 & 78.00 & 79.58 \\
+fedprop_serverdist_0.3 & 77.62 & 77.69 & 77.66 & 79.10 \\
+fedprop_serverdist_0.4 & 78.41 & 75.03 & 76.72 & 79.49 \\
+fedprop_serverdist_0.5 & 62.22 & 81.05 & 71.63 & 79.09 \\
+fedprop_serverdist_0.6 & 73.79 & \textbf{81.16} & 77.47 & 78.59 \\
+fedprop_serverdist_0.7 & 77.41 & 70.04 & 73.73 & \textbf{79.78} \\
+fedprop_serverdist_0.8 & 74.48 & 76.55 & 75.51 & 79.46 \\
+fedprop_serverdist_0.9 & 71.87 & 80.06 & 75.97 & 79.61 \\
+fedprop_serverdist_1.0 & \textbf{82.61} & 80.45 & \textbf{81.53} & 79.61 \\

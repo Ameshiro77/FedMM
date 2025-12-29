@@ -13,12 +13,10 @@ class FedProto(Server):
 
     def __init__(self, dataset, algorithm, input_sizes, rep_size, n_classes,
                  modalities, batch_size, learning_rate, beta, lamda,
-                 num_glob_iters, local_epochs, optimizer, num_users, times,
-                 label_ratio=0.1):
-
+                 num_glob_iters, local_epochs, optimizer, num_users, times, label_ratio=0.1, pfl=False):
         super().__init__(dataset, algorithm, input_sizes, rep_size, n_classes,
                          modalities, batch_size, learning_rate, beta, lamda,
-                         num_glob_iters, local_epochs, optimizer, num_users, times)
+                         num_glob_iters, local_epochs, optimizer, num_users, times, pfl)
 
         # 实例化客户端
         for i in range(self.total_users):
@@ -35,12 +33,20 @@ class FedProto(Server):
             )
             client_cf = MLP(rep_size , n_classes)
 
-            user = UserProto(
-                i, self.clients_train_data_list[i], self.test_data, self.public_data,
+            if pfl:
+                user = UserProto(
+                i, self.clients_train_data_list[i], self.clients_test_data_list[i], self.public_data,
                 client_ae, client_cf, client_modals,
                 batch_size, learning_rate, beta, lamda,
                 local_epochs, label_ratio
             )
+            else:
+                user = UserProto(
+                    i, self.clients_train_data_list[i], self.test_data, self.public_data,
+                    client_ae, client_cf, client_modals,
+                    batch_size, learning_rate, beta, lamda,
+                    local_epochs, label_ratio
+                )
             self.users.append(user)
 
         # 全局 prototype

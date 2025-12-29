@@ -1,116 +1,127 @@
 import json
 import os
-
-results_dir = "results"
-output_dir = os.path.join(results_dir, "comparisons")
-os.makedirs(output_dir, exist_ok=True)
+import matplotlib.pyplot as plt
 
 # 数据集及其模态
 datasets_modalities = {
     "mhealth": ["acce", "gyro", "mage"],
     "opp": ["acce", "gyro"],
-    "hapt": ["acce", "gyro"]
+    "ur_fall": ["acce", "rgb", "depth"]
 }
 
-# 方法列表，FedCent 替代 Single
-methods = ["FedCent", "FedAvg", "Fedprox", "Fedproto", "FedMEKT", "FDARN", "FedMEMA", "FedProp"]
-
-# 方法对应的文件名
+# 文件名(Key) -> 显示名称(Value)
 file_method_map = {
-    "FedCent": "fedcent",
-    "FedAvg": "fedavg",
-    "Fedprox": "fedprox",
-    "Fedproto": "fedproto",
-    "FedMEKT": "fedmekt",
-    "FDARN": "fdarn",
-    "FedMEMA": "fedmema",
-    "FedProp": "fedprop"
+    "fedcent":  "Single",
+    "fedavg":   "FedAvg",
+    "fedprox":  "FedProx",
+    "fedproto": "FedProto",
+    "fedmekt":  "FedMEKT",
+    # "fedab":    "FedAB",
+    # "fedpropgen": "FedPropGEN",
+    "feddtg":   "FedDTG",
+    "fedprop":  "FedProp",
 }
 
-def load_data(dataset, algorithm):
-    """读取服务端和客户端精度"""
+def load_data(dataset, file_prefix, results_dir):
+    """
+    读取服务端和客户端精度
+    """
     dataset_dir = os.path.join(results_dir, dataset.lower())
-    acc_file = os.path.join(dataset_dir, f"{file_method_map[algorithm]}_acc.json")
-    clients_file = os.path.join(dataset_dir, f"{file_method_map[algorithm]}_clients_accs.json")
+    
+    acc_file = os.path.join(dataset_dir, f"{file_prefix}_acc.json")
+    clients_file = os.path.join(dataset_dir, f"{file_prefix}_clients_accs.json")
 
-    # 服务端精度
+    # --- 服务端 ---
     server_acc = 0
     if os.path.exists(acc_file):
-        with open(acc_file, 'r') as f:
-            data = json.load(f)
-        global_acc = data.get("global_accuracy", [])
-        if global_acc:
-            server_acc = global_acc[-1] * 100  # 转成百分比
+        try:
+            with open(acc_file, 'r') as f:
+                data = json.load(f)
+            global_acc = data.get("global_accuracy", [])
+            if global_acc:
+                server_acc = global_acc[-1] * 100
+        except Exception:
+            pass
 
-    # 客户端精度
+    # --- 客户端 ---
     avg_client_acc = 0
     avg_modality_acc = {m: 0 for m in datasets_modalities[dataset]}
+    
     if os.path.exists(clients_file):
-        with open(clients_file, 'r') as f:
-            data = json.load(f)
-        avg_client_acc = data.get("avg_client_acc", 0) * 100
-        for m in datasets_modalities[dataset]:
-            avg_modality_acc[m] = data.get("avg_modality_acc", {}).get(m, 0) * 100
+        try:
+            with open(clients_file, 'r') as f:
+                data = json.load(f)
+
+            avg_client_acc = data.get("avg_client_acc", 0) * 100
+            raw_modality_data = data.get("avg_modality_acc", {})
+            modality_data_lower = {k.lower(): v for k, v in raw_modality_data.items()}
+
+            for m in datasets_modalities[dataset]:
+                if m.lower() in modality_data_lower:
+                    avg_modality_acc[m] = modality_data_lower[m.lower()] * 100
+        except Exception as e:
+            print(f"Error reading {clients_file}: {e}")
 
     return server_acc, avg_client_acc, avg_modality_acc
 
-def generate_table():
-    table_file = os.path.join(output_dir, "table_accuracy.txt")
 
-    # 收集所有数据先计算每列最大值
-    table_data = {method: {} for method in methods}
-    for method in methods:
+def generate_table(results_dir="results"):
+    output_dir = os.path.join(results_dir, "comparisons")
+    os.makedirs(output_dir, exist_ok=True)
+
+    table_file = os.path.join(output_dir, "table_accuracy.txt")
+    active_keys = list(file_method_map.keys())
+
+    table_data = {k: {} for k in active_keys}
+
+    for key in active_keys:
         for dataset in datasets_modalities:
-            server_acc, avg_client_acc, avg_modality_acc = load_data(dataset, method)
-            table_data[method][dataset] = {
+            server_acc, avg_client_acc, avg_modality_acc = load_data(
+                dataset, key, results_dir
+            )
+            table_data[key][dataset] = {
                 "modality": avg_modality_acc,
                 "client": avg_client_acc,
                 "server": server_acc
             }
 
-    # 计算每列最大值
+    # 计算最大值（加粗用）
     col_max = {}
     for dataset, modalities in datasets_modalities.items():
         for m in modalities + ["client", "server"]:
-            col_max[(dataset, m)] = max(
-                table_data[method][dataset]["modality"].get(m, table_data[method][dataset].get(m))
-                if m in modalities else table_data[method][dataset][m]
-                for method in methods
-            )
+            values = []
+            for key in active_keys:
+                if m in modalities:
+                    val = table_data[key][dataset]["modality"].get(m, 0)
+                elif m == "client":
+                    val = table_data[key][dataset]["client"]
+                else:
+                    val = table_data[key][dataset]["server"]
+                values.append(val)
+            col_max[(dataset, m)] = max(values) if values else 0
 
-    # 写入表格文件
+    # 写表格
     with open(table_file, 'w') as f:
-        for method in methods:
-            line = method
+        for key in active_keys:
+            line = file_method_map[key]
             for dataset, modalities in datasets_modalities.items():
-                avg_modality_acc = table_data[method][dataset]["modality"]
-                avg_client_acc = table_data[method][dataset]["client"]
-                server_acc = table_data[method][dataset]["server"]
-                # 每个模态列
+                d = table_data[key][dataset]
+
                 for m in modalities:
-                    val = avg_modality_acc[m]
-                    val_str = f"{val:.2f}"
-                    if val == col_max[(dataset, m)]:
-                        line += f" & \\textbf{{{val_str}}}"
-                    else:
-                        line += f" & {val_str}"
-                # 客户端平均
-                val = avg_client_acc
-                val_str = f"{val:.2f}"
-                if val == col_max[(dataset, "client")]:
-                    line += f" & \\textbf{{{val_str}}}"
-                else:
-                    line += f" & {val_str}"
-                # 服务端
-                val = server_acc
-                val_str = f"{val:.2f}"
-                if val == col_max[(dataset, "server")]:
-                    line += f" & \\textbf{{{val_str}}}"
-                else:
-                    line += f" & {val_str}"
-            line += " \\\\\n"
-            f.write(line)
+                    v = d["modality"][m]
+                    s = f"{v:.2f}"
+                    line += f" & \\textbf{{{s}}}" if v == col_max[(dataset, m)] and v > 0 else f" & {s}"
+
+                for tag in ["client", "server"]:
+                    v = d[tag]
+                    s = f"{v:.2f}"
+                    line += f" & \\textbf{{{s}}}" if v == col_max[(dataset, tag)] and v > 0 else f" & {s}"
+
+            f.write(line + " \\\\\n")
 
     print(f"Accuracy table saved to {table_file}")
 
-generate_table()
+
+if __name__ == "__main__":
+    generate_table("results")
+    generate_table("results/pfl")

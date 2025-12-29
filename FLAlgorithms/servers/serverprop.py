@@ -21,12 +21,16 @@ import seaborn as sns
 class FedProp(Server):
     def __init__(self, dataset, algorithm, input_sizes, rep_size, n_classes,
                  modalities, batch_size, learning_rate, beta, lamda,
-                 num_glob_iters, local_epochs, optimizer, num_users, times, label_ratio=0.1):
+                 num_glob_iters, local_epochs, optimizer, num_users, times, label_ratio=0.1, pfl=False, args=None):
         super().__init__(dataset, algorithm, input_sizes, rep_size, n_classes,
                          modalities, batch_size, learning_rate, beta, lamda,
-                         num_glob_iters, local_epochs, optimizer, num_users, times)
+                         num_glob_iters, local_epochs, optimizer, num_users, times, pfl)
 
         self.total_users = len(modalities)
+        self.pfl = pfl
+        self.args = args
+        self.server_dist_weight = args.server_dist_weight
+        self.server_align_weight = args.server_align_weight
 
         # self.cf_model_server = MLP(rep_size, n_classes).to(self.device)
 
@@ -48,7 +52,7 @@ class FedProp(Server):
             for m in self.modalities_server
         }).to(self.device)
         nn.init.xavier_uniform_(self.attn_w)
-
+        self.cf_model_server = MLP(rep_size, n_classes).to(self.device)
         for i in range(self.total_users):
 
             client_modals = modalities[i]
@@ -71,11 +75,18 @@ class FedProp(Server):
             )
 
             client_cf = MLP(rep_size*2, n_classes)
-            user = UserProp(
-                i, self.clients_train_data_list[i], self.test_data, self.public_data, client_ae, client_cf,
-                client_modals, batch_size, learning_rate, beta, lamda,
-                local_epochs, label_ratio=label_ratio)
 
+            if pfl:
+                user = UserProp(
+                    i, self.clients_train_data_list[i],
+                    self.clients_test_data_list[i],
+                    self.public_data, client_ae, client_cf, client_modals, batch_size, learning_rate, beta, lamda,
+                    local_epochs, label_ratio=label_ratio, args=args)
+            else:
+                user = UserProp(
+                    i, self.clients_train_data_list[i], self.test_data, self.public_data, client_ae, client_cf,
+                    client_modals, batch_size, learning_rate, beta, lamda,
+                    local_epochs, label_ratio=label_ratio, args=args)
             user.info()
 
             print("client", i, "modals:", client_modals)
@@ -257,8 +268,8 @@ class FedProp(Server):
                 # z_proj = [self.proj_heads[m](z_m_all[m]) for m in z_m_all.keys()]
                 # z_center = torch.stack(z_proj).mean(dim=0)
                 # # align_loss = sum(F.mse_loss(z_proj[i], z_center) for i in range(len(z_proj)))
-                # z_proj_dict = {m: self.proj_heads[m](z_m_all[m]) for m in z_m_all.keys()}
-                # align_loss = contrastive_modality_align(z_proj_dict)
+                z_proj_dict = {m: self.proj_heads[m](z_m_all[m]) for m in z_m_all.keys()}
+                align_loss = contrastive_modality_align(z_proj_dict)
 
                 # === Step 5. 分类训练 ===
                 # z_fuse = torch.cat([z for z in z_m_all.values()], dim=-1)
@@ -289,15 +300,14 @@ class FedProp(Server):
 
                 # === Step 6. 总损失 ===
                 total_loss = (
-                    1.0 * dist_loss +
-                    0.00 * align_loss +
+                    self.server_dist_weight * dist_loss +
+                    self.server_align_weight * align_loss +
                     1.0 * cls_loss
                 )
 
                 total_loss.backward()
                 self.optimizer_ae.step()
                 self.optimizer_cf.step()
-
             print(f"[Server Train] Distill={dist_loss:.4f} Align={align_loss:.4f} Cls={cls_loss:.4f}")
 
             # z_global_center = z_center.mean(dim=0).detach()  # 跨batch平均
@@ -364,7 +374,13 @@ class FedProp(Server):
 
             # Step 4: 客户端 CF 训练
             for user in self.selected_users:
-                cf_loss_dict = user.train_cf_prop(server_logits)
+
+                if self.args.client_logits_weight > 0.001:
+                    cf_loss_dict = user.train_cf_prop_dyn(server_logits)
+                elif self.args.client_logits_weight < -0.001:
+                    cf_loss_dict = user.train_cf_prop(server_logits, 0.5)
+                else:
+                    cf_loss_dict = user.train_cf_prop(None, 0.0)
                 print(f"[Client {user.client_id}] CF => Loss={cf_loss_dict['cf_loss']:.4f}, Acc={cf_loss_dict['cf_acc']:.4f}")
 
                 # 记录单客户端 CF 损失
@@ -406,29 +422,44 @@ class FedProp(Server):
             self.rs_glob_acc.append(acc)
             self.rs_glob_f1.append(f1)
 
-        save_path = f"./results/{self.dataset}/loss_server.json"
-        client_loss_all = {}
-        for user in self.selected_users:
-            client_loss_all[user.client_id] = {
-                "ae_loss": user.loss_history,
-                "cf_loss": user.cf_loss_history
-            }
-        all_losses = {
-            "global_losses": self.loss_history,       # AE 与 CF 全局平均损失
-            "global_train_loss": self.rs_train_loss,  # server test loss
-            "global_acc": self.rs_glob_acc,
-            "global_f1": self.rs_glob_f1,
-            "client_losses": client_loss_all          # 每个客户端
-        }
-        with open(save_path, "w") as f:
-            json.dump(all_losses, f, indent=4)
-        print(f"[Saved] Loss JSON => {save_path}")
-        # Step 7: 可视化 + 保存
-        self.plot_losses(save_dir=f"./results/{self.dataset}/")
-        self.plot_client_losses(save_dir=f"./results/{self.dataset}/")
-        self.test_clients()
+        if self.args.ablation:
+            client_accs, avg_client_acc, avg_modality_acc = self.test_clients()
+            return self.rs_glob_acc, avg_client_acc, avg_modality_acc
 
-        self.save_results()
+        else:
+            if self.pfl:
+                save_path = f"./results/pfl/{self.dataset}/loss_server.json"
+                save_dir = f"./results/pfl/{self.dataset}/"
+                os.makedirs(save_dir, exist_ok=True)
+
+            else:
+                save_path = f"./results/{self.dataset}/loss_server.json"
+                save_dir = f"./results/{self.dataset}/"
+                os.makedirs(save_dir, exist_ok=True)
+
+            client_loss_all = {}
+            for user in self.selected_users:
+                client_loss_all[user.client_id] = {
+                    "ae_loss": user.loss_history,
+                    "cf_loss": user.cf_loss_history
+                }
+            all_losses = {
+                "global_losses": self.loss_history,       # AE 与 CF 全局平均损失
+                "global_train_loss": self.rs_train_loss,  # server test loss
+                "global_acc": self.rs_glob_acc,
+                "global_f1": self.rs_glob_f1,
+                "client_losses": client_loss_all          # 每个客户端
+            }
+            with open(save_path, "w") as f:
+                json.dump(all_losses, f, indent=4)
+            print(f"[Saved] Loss JSON => {save_path}")
+            # Step 7: 可视化 + 保存
+
+            self.plot_losses(save_dir=save_dir)
+            self.plot_client_losses(save_dir=save_dir)
+            client_accs, avg_client_acc, avg_modality_acc = self.test_clients()
+            self.save_results()
+            return None
 
     def plot_losses(self, save_dir):
         os.makedirs(save_dir, exist_ok=True)
@@ -522,82 +553,58 @@ class FedProp(Server):
 
         print(f"[INFO] Individual client losses saved to {client_save_dir}")
 
-        # prototypes
-        # total_counts = {}
-        # for _, weight_dict in prototypes_weights:
-        #     for cls, count in weight_dict.items():
-        #         total_counts[cls] = total_counts.get(cls, 0) + count
+    def test_server(self):
+        """服务器端测试集评估"""
+        self.ae_model_server.eval()
+        self.cf_model_server.eval()
 
-        # # 初始化全局原型容器
-        # global_prototypes = {}
+        total_loss, total_correct, total_samples = 0.0, 0, 0
+        eval_win = EVAL_WIN
+        # 添加F1 Score计算所需的变量
+        all_preds = []
+        all_labels = []
 
-        # for proto_dict, weight_dict in prototypes_weights:
-        #     for cls, proto in proto_dict.items():
-        #         if cls not in total_counts or total_counts[cls] == 0:
-        #             continue
-        #         weight = weight_dict[cls] / total_counts[cls]
-        #         if cls not in global_prototypes:
-        #             global_prototypes[cls] = proto * weight
-        #         else:
-        #             global_prototypes[cls] += proto * weight
+        with torch.no_grad():
+            for start in range(0, len(self.test_data["y"]) - eval_win + 1, eval_win):
+                batch_x = {
+                    m: torch.tensor(
+                        self.test_data[m][start:start + eval_win],
+                        dtype=torch.float32, device=self.device
+                    ).unsqueeze(0)
+                    for m in self.modalities_server
+                }
+                batch_y = torch.tensor(
+                    self.test_data["y"][start:start + eval_win],
+                    dtype=torch.long, device=self.device
+                )
 
-        # =========================================================================================
+                z_m_all = {}
+                for m in self.modalities_server:
+                    _, hidden_seq = self.ae_model_server.encode(batch_x[m], m)
+                    # hidden_seq: [1, T, D]
+                    z_m_all[m] = hidden_seq    # 直接保持与训练阶段一致
 
-    # def test_server(self):
-    #     """服务器端测试集评估"""
-    #     self.ae_model_server.eval()
-    #     self.cf_model_server.eval()
+                z_fuse = self.fusionNet(z_m_all)
+                outputs = self.cf_model_server(z_fuse)
 
-    #     total_loss, total_correct, total_samples = 0.0, 0, 0
-    #     eval_win = EVAL_WIN
+                loss = self.cls_loss_fn(outputs, batch_y)
+                preds = torch.argmax(outputs, dim=1)
 
-    #     all_preds = []
-    #     all_labels = []
+                total_loss += loss.item() * batch_y.size(0)
+                total_correct += (preds == batch_y).sum().item()
+                total_samples += batch_y.size(0)
 
-    #     with torch.no_grad():
-    #         for start in range(0, len(self.test_data["y"]) - eval_win + 1, eval_win):
-    #             batch_x = {
-    #                 m: torch.tensor(
-    #                     self.test_data[m][start:start + eval_win],
-    #                     dtype=torch.float32, device=self.device
-    #                 ).unsqueeze(0)  # [1, win_len, D_m]
-    #                 for m in self.modalities_server
-    #             }
-    #             batch_y = torch.tensor(
-    #                 self.test_data["y"][start:start + eval_win],
-    #                 dtype=torch.long, device=self.device
-    #             )
+                # 收集预测结果和真实标签
+                all_preds.append(preds.cpu())
+                all_labels.append(batch_y.cpu())
 
-    #             z_m_all = {}
-    #             for m in self.modalities_server:
-    #                 _, z_m = self.ae_model_server.encode(batch_x[m], m)  # [1, T, D]
-    #                 z_m_all[m] = z_m.squeeze(0)  # [T, D]
+        all_preds = torch.cat(all_preds)
+        all_labels = torch.cat(all_labels)
+        from sklearn.metrics import f1_score
+        f1 = f1_score(all_labels.numpy(), all_preds.numpy(), average='weighted')  # 对于多分类使用加权平均
 
-    #             # 加权融合成 [T, D]
-    #             weight_tensor = torch.stack([self.modality_weight[m] for m in z_m_all.keys()])  # [M]
-    #             weight_norm = torch.softmax(weight_tensor, dim=0)
+        avg_loss = total_loss / total_samples
+        avg_acc = total_correct / total_samples
 
-    #             z_global = sum(weight_norm[i] * z_m_all[m] for i, m in enumerate(z_m_all.keys()))  # [T, D]
-
-    #             # 直接送分类器
-    #             outputs = self.cf_model_server(z_global)  # [T, num_classes]
-    #             loss = self.cls_loss_fn(outputs, batch_y)
-    #             preds = torch.argmax(outputs, dim=1)
-
-    #             total_loss += loss.item() * batch_y.size(0)
-    #             total_correct += (preds == batch_y).sum().item()
-    #             total_samples += batch_y.size(0)
-
-    #             all_preds.append(preds.cpu())
-    #             all_labels.append(batch_y.cpu())
-
-    #     all_preds = torch.cat(all_preds)
-    #     all_labels = torch.cat(all_labels)
-    #     from sklearn.metrics import f1_score
-    #     f1 = f1_score(all_labels.numpy(), all_preds.numpy(), average='weighted')
-
-    #     avg_loss = total_loss / total_samples
-    #     avg_acc = total_correct / total_samples
-
-    #     print(f"Server Test - Loss: {avg_loss:.4f}, Accuracy: {avg_acc:.4f}, F1 Score: {f1:.4f}")
-    #     return avg_loss, avg_acc, f1
+        print(f"Server Test - Loss: {avg_loss:.4f}, Accuracy: {avg_acc:.4f}, F1 Score: {f1:.4f}")
+        return avg_loss, avg_acc, f1

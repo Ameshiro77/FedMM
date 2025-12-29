@@ -17,10 +17,10 @@ import matplotlib.pyplot as plt
 class FedCent(Server):
     def __init__(self, dataset, algorithm, input_sizes, rep_size, n_classes,
                  modalities, batch_size, learning_rate, beta, lamda,
-                 num_glob_iters, local_epochs, optimizer, num_users, times, label_ratio=0.1):
+                 num_glob_iters, local_epochs, optimizer, num_users, times, label_ratio=0.1, pfl=False):
         super().__init__(dataset, algorithm, input_sizes, rep_size, n_classes,
                          modalities, batch_size, learning_rate, beta, lamda,
-                         num_glob_iters, local_epochs, optimizer, num_users, times)
+                         num_glob_iters, local_epochs, optimizer, num_users, times, pfl)
 
         self.total_users = len(modalities)
 
@@ -44,10 +44,16 @@ class FedCent(Server):
             )
 
             client_cf = MLP(rep_size, n_classes)
-            user = User(
-                i, self.clients_train_data_list[i], self.test_data, self.public_data, client_ae, client_cf,
+            if pfl:
+                user = User(
+                i, self.clients_train_data_list[i], self.clients_test_data_list[i], self.public_data, client_ae, client_cf,
                 client_modals, batch_size, learning_rate, beta, lamda,
                 local_epochs, label_ratio=label_ratio)
+            else:
+                user = User(
+                    i, self.clients_train_data_list[i], self.test_data, self.public_data, client_ae, client_cf,
+                    client_modals, batch_size, learning_rate, beta, lamda,
+                    local_epochs, label_ratio=label_ratio)
             print("client", i, "modals:", client_modals)
             self.users.append(user)
 
@@ -60,11 +66,11 @@ class FedCent(Server):
             self.rs_train_loss.append(loss)
             self.rs_glob_acc.append(acc)
             self.rs_glob_f1.append(f1)
-            
+
             for user in self.users:
                 user.train_ae()
                 user.train_cf()
-            
+
         print("Test F1: ", self.rs_glob_f1)
         print("Test accuracy: ", self.rs_glob_acc)
         accs = self.test_clients()

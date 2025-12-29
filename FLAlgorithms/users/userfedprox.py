@@ -21,7 +21,7 @@ class UserFedprox(User):
                          beta, lamda, local_epochs,
                          label_ratio)
         
-        self.mu = 0.1
+        self.mu = 3.0
 
 
     def train_ae_prox(self, global_model=None):

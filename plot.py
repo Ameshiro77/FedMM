@@ -2,69 +2,139 @@ import json
 import os
 import matplotlib.pyplot as plt
 from export import generate_table
+
+# ================= Configuration Area =================
+
+results_dir = "results"
+
+# Datasets and Modalities
+datasets_modalities = {
+    "mhealth": ["acce", "gyro", "mage"],
+    "opp": ["acce", "gyro"],
+    # "hapt": ["acce", "gyro"],
+    "ur_fall": ["acce", "rgb", "depth"]
+}
+
+# [Core Config] Filename Prefix (Key) -> Display Name (Value)
+file_method_map = {
+    "fedcent":   "Single",
+    "fedavg":    "FedAvg",
+    "fedprox":   "FedProx",
+    "fedproto":  "FedProto",
+    "fedmekt":   "FedMEKT",
+    # "fdarn":     "FDARN",
+    # "fedmema":   "FedMEMA",
+    "fedprop":   "FedProp",
+    # "fedab":     "FedAB",
+    # "fedpropgen": "FedPropGEN",
+    "feddtg":    "FedDTG",
+}
+
+# [NEW] Display Name -> Fixed Color
+# This ensures "FedAvg" is always Blue, "FedProp" is always Red, etc.
+method_colors = {
+    "Single":   "gray",
+    "FedAvg":   "blue",
+    "FedProx":  "cyan",
+    "FedProto": "green",
+    "FedMEKT":  "orange",
+    "FDARN":    "purple",
+    "FedMEMA":  "brown",
+    "FedProp":  "red",      # Highlight your method
+    "FedDTG":   "#FF00FF",  # Magenta (Highlight your method)
+    "FedAB":    "pink",
+    "FedPropGEN": "olive"
+}
+
+# ===============================================================
+
 def compare_algorithms(results_dir="results"):
     """
-    绘制不同算法的精度和F1分数比较图
+    Draw comparison plots based on configuration with consistent colors.
     """
-    import glob
-    
-    # 查找所有算法的精度 JSON 文件
-    pattern = os.path.join(results_dir, "**", "*_acc.json")
-    json_files = glob.glob(pattern, recursive=True)
-    
-    if not json_files:
-        print(f"No accuracy JSON files found in {results_dir}")
-        return
-    
-    # 读取所有算法的数据
-    algorithms_data = {}
-    for json_file in json_files:
-        try:
-            with open(json_file, 'r') as f:
-                data = json.load(f)
-                
-            algorithm_name = data.get("algorithm", "Unknown")
-            dataset_name = data.get("dataset", "Unknown")
-            global_acc = data.get("global_accuracy", [])
-            global_f1 = data.get("global_f1", [])  # 新增F1分数
-            rounds = data.get("rounds", list(range(1, len(global_acc) + 1)))
+    # Prepare data container
+    plot_data = {ds: {} for ds in datasets_modalities.keys()}
+
+    print(f"Start loading data from {results_dir}...")
+
+    # 1. Iterate through datasets
+    for dataset in datasets_modalities.keys():
+        dataset_dir = os.path.join(results_dir, dataset.lower())
+        
+        # 2. Iterate through config
+        for file_key, display_name in file_method_map.items():
             
-            # 按数据集分组
-            if dataset_name not in algorithms_data:
-                algorithms_data[dataset_name] = {}
-            
-            algorithms_data[dataset_name][algorithm_name] = {
-                "accuracy": global_acc,
-                "f1_score": global_f1,  # 保存F1分数
-                "rounds": rounds
-            }
-            
-        except Exception as e:
-            print(f"Error reading {json_file}: {e}")
-    
-    # 为每个数据集绘制比较图
-    for dataset, alg_data in algorithms_data.items():
-        # 创建包含两个子图的图表
+            # Construct file path
+            json_file = os.path.join(dataset_dir, f"{file_key}_acc.json")
+
+            # Try reading (case-insensitive fallback)
+            target_file = json_file
+            if not os.path.exists(target_file) and os.path.exists(json_file.lower()):
+                target_file = json_file.lower()
+
+            if os.path.exists(target_file):
+                try:
+                    with open(target_file, 'r') as f:
+                        data = json.load(f)
+                        
+                        # Get data
+                        global_acc = data.get("global_accuracy", [])
+                        global_f1 = data.get("global_f1", [])
+                        rounds = data.get("rounds", list(range(1, len(global_acc) + 1)))
+
+                        # Store in dictionary
+                        plot_data[dataset][file_key] = {
+                            "accuracy": global_acc,
+                            "f1_score": global_f1,
+                            "rounds": rounds,
+                            "label": display_name # Store the display name
+                        }
+                except Exception as e:
+                    print(f"Error reading {target_file}: {e}")
+            else:
+                pass 
+
+    # 3. Plotting Logic
+    comparison_dir = os.path.join(results_dir, "comparisons")
+    os.makedirs(comparison_dir, exist_ok=True)
+
+    for dataset, alg_data in plot_data.items():
+        if not alg_data:
+            print(f"No data found for dataset: {dataset}, skipping plot.")
+            continue
+
+        print(f"Plotting for {dataset}...")
+
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
         
-        # 绘制精度比较图
-        for alg_name, data in alg_data.items():
-            rounds = data["rounds"]
-            accuracy = data["accuracy"]
-            ax1.plot(rounds, accuracy, label=alg_name, linewidth=2)
-        
+        # Iterate file_method_map again to ensure legend order matches config
+        for file_key in file_method_map.keys():
+            if file_key in alg_data:
+                data = alg_data[file_key]
+                rounds = data["rounds"]
+                accuracy = data["accuracy"]
+                f1_score = data["f1_score"]
+                label_name = data["label"] 
+                
+                # [NEW] Get the fixed color for this algorithm
+                # If not defined in method_colors, default to None (auto color)
+                line_color = method_colors.get(label_name, None)
+                
+                # Plot Accuracy with specific color
+                ax1.plot(rounds, accuracy, label=label_name, linewidth=2, color=line_color)
+                
+                # Plot F1 with specific color
+                if f1_score and len(f1_score) > 0:
+                    ax2.plot(rounds, f1_score, label=label_name, linewidth=2, color=line_color)
+
+        # Settings for Accuracy Subplot
         ax1.set_xlabel("Communication Rounds")
         ax1.set_ylabel("Global Accuracy")
         ax1.set_title(f"Accuracy Comparison - {dataset}")
         ax1.legend()
         ax1.grid(True, alpha=0.3)
         
-        # 绘制F1分数比较图
-        for alg_name, data in alg_data.items():
-            rounds = data["rounds"]
-            f1_score = data["f1_score"]
-            ax2.plot(rounds, f1_score, label=alg_name, linewidth=2)
-        
+        # Settings for F1 Subplot
         ax2.set_xlabel("Communication Rounds")
         ax2.set_ylabel("Global F1 Score")
         ax2.set_title(f"F1 Score Comparison - {dataset}")
@@ -73,24 +143,19 @@ def compare_algorithms(results_dir="results"):
         
         plt.tight_layout()
         
-        # 保存比较图
-        comparison_dir = os.path.join(results_dir, "comparisons")
-        os.makedirs(comparison_dir, exist_ok=True)
         comparison_path = os.path.join(comparison_dir, f"{dataset}_comparison.svg")
         plt.savefig(comparison_path, format="svg", bbox_inches='tight')
         plt.close()
         
-        print(f"Comparison plot saved to {comparison_path}")
-        
-        # 在控制台输出最终精度和F1分数
-        print(f"\nFinal Performance for {dataset}:")
-        for alg_name, data in alg_data.items():
-            final_acc = data["accuracy"][-1] if data["accuracy"] else 0
-            final_f1 = data["f1_score"][-1] if data["f1_score"] else 0
-            print(f"  {alg_name}: Accuracy={final_acc:.4f}, F1 Score={final_f1:.4f}")
+        print(f"Saved: {comparison_path}")
 
+    print("\nComparison plots generation finished.")
 
+if __name__ == "__main__":
 
+    compare_algorithms(results_dir="results")
+    generate_table(results_dir="results")
 
-compare_algorithms()
-generate_table()
+    # PFL
+    compare_algorithms(results_dir="results/pfl")
+    generate_table(results_dir="results/pfl")
