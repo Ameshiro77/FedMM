@@ -1,5 +1,5 @@
-fedprop & 49.00 & \textbf{67.06} & \textbf{64.95} & \textbf{60.34} & \textbf{83.24} \\
-wo_client_align & 42.07 & 65.77 & 61.00 & 56.28 & 75.87 \\
+fedprop & \textbf{58.39} & 61.73 & 55.81 & \textbf{60.34} & \textbf{86.18} \\
+wo_client_align & 42.07 & \textbf{65.77} & 61.00 & 56.28 & 75.87 \\
 wo_client_dist & 53.23 & 44.05 & 55.95 & 51.08 & 77.87 \\
-wo_server_align & \textbf{53.93} & 51.65 & 57.80 & 54.46 & 77.93 \\
-wo_server_dist & 50.80 & 56.94 & 61.13 & 56.29 & 74.59 \\
+wo_server_align & 53.93 & 51.65 & 57.80 & 54.46 & 77.93 \\
+wo_server_dist & 50.80 & 56.94 & \textbf{61.13} & 56.29 & 74.59 \\

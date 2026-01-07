@@ -62,11 +62,6 @@ class FedProp(Server):
                 input_sizes_client = {client_modals: input_sizes[client_modals]}
 
             input_size = list(input_sizes_client.values())[0]
-            # 实例化该客户端的 AE
-            # client_ae = SplitLSTMAutoEncoder(
-            #     input_sizes=input_sizes_client,
-            #     representation_size=rep_size
-            # )
             client_ae = DisentangledLSTMAutoEncoder(
                 input_size=input_size,
                 representation_size=rep_size,
@@ -186,158 +181,173 @@ class FedProp(Server):
         plt.close()
 
     def train_server(self, z_shares_all_list, prototypes_weights, glob_iter):
-        """
-        服务端蒸馏 + 对齐 + 分类联合训练
-        """
-        self.cf_model_server.train()
-        self.ae_model_server.train()
+            """
+            服务端蒸馏 + 对齐 + 分类联合训练
+            """
+            self.cf_model_server.train()
+            self.ae_model_server.train()
 
-        # =========================================================================================
-        # === Step 1. 聚合同模态客户端特征 ===
+            # =========================================================================================
+            # === Step 1. 聚合同模态客户端特征 ===
+            z_shares_all = {}
+            for client_dict in z_shares_all_list:
+                for mod, z_share in client_dict.items():
+                    z_shares_all.setdefault(mod, []).append(z_share)
 
-        # z_shares
-        z_shares_all = {}
-        for client_dict in z_shares_all_list:
-            for mod, z_share in client_dict.items():
-                z_shares_all.setdefault(mod, []).append(z_share)
+            # 可视化部分 (保持不变)
+            if glob_iter % 10 == 0:
+                pass
 
-        if glob_iter % 10 == 0:
-            pass
-            # self._visualize_modal_distributions(prototypes_weights, glob_iter)
-            # self._visualize_modal_distributions(z_shares_all, glob_iter)
+            # === Step 2. 使用服务端数据进行训练 ===
+            modalities_seq, labels = make_seq_batch2(self.server_train_data, self.batch_size)
+            seq_len_batch = modalities_seq[self.modalities_server[0]].shape[1]
+            
+            # 这里的 z_fuse_all 仅用于训练过程记录，不做最后返回
+            # z_fuse_all = [] 
 
-        z_modal_clients = {}
-        for m, zs in z_shares_all.items():
-            z_means = torch.stack(zs, dim=0)  # [num_clients_m, B, D_m]
-            z_modal_clients[m] = z_means.mean(dim=0).to(self.device)  # FedAvg
+            for epoch in range(1):
+                idx_end = 0
+                while idx_end < seq_len_batch:
+                    win_len = np.random.randint(16, 32)
+                    idx_start = idx_end
+                    idx_end = min(idx_end + win_len, seq_len_batch)
 
-        # === Step 2. 使用服务端数据进行训练 ===
-        modalities_seq, labels = make_seq_batch2(self.server_train_data, self.batch_size)
-        seq_len_batch = modalities_seq[self.modalities_server[0]].shape[1]
-        z_fuse_all = []
-        for epoch in range(1):
-            idx_end = 0
-            while idx_end < seq_len_batch:
-                win_len = np.random.randint(16, 32)
-                # win_len = modalities_seq[self.modalities_server[0]].shape[1]
-                idx_start = idx_end
-                idx_end = min(idx_end + win_len, seq_len_batch)
+                    self.optimizer_ae.zero_grad()
+                    self.optimizer_cf.zero_grad()
 
-                self.optimizer_ae.zero_grad()
-                self.optimizer_cf.zero_grad()
+                    z_m_all = {}
+                    dist_loss, align_loss, cls_loss = 0.0, 0.0, 0.0
 
-                z_m_all = {}
-                dist_loss, align_loss, cls_loss, proto_loss = 0.0, 0.0, 0.0, 0.0
+                    # === Step 3. 计算每个模态的server特征 & 蒸馏 ===
+                    for m in self.modalities_server:
+                        x_m = torch.from_numpy(modalities_seq[m][:, idx_start:idx_end, :]).float().to(self.device)
+                        _, z_m = self.ae_model_server.encode(x_m, m)      # [B, T, D]
+                        z_m_all[m] = z_m
+                        z_m_pooled = z_m.mean(dim=1)                      # [B, D]
 
-                # === Step 3. 计算每个模态的server特征 & 蒸馏 ===
-                for m in self.modalities_server:
-                    x_m = torch.from_numpy(modalities_seq[m][:, idx_start:idx_end, :]).float().to(self.device)
-                    _, z_m = self.ae_model_server.encode(x_m, m)      # [B, T, D]
-                    z_m_all[m] = z_m
-                    z_m_pooled = z_m.mean(dim=1)                      # [B, D]
+                        # ====== 准备客户端特征 bank ======
+                        z_s = F.normalize(z_m_pooled, dim=-1)             # [B, D]
+                        z_c = F.normalize(torch.cat(z_shares_all[m], dim=0).to(self.device), dim=-1)  # [N_total, D]
 
-                    # ====== 准备客户端特征 bank ======
-                    z_s = F.normalize(z_m_pooled, dim=-1)          # [B, D]
-                    z_c = F.normalize(torch.cat(z_shares_all[m], dim=0).to(self.device), dim=-1)  # [N_total, D]
+                        # ====== 2. MMD ======
+                        mmd_loss_val = compute_mmd(z_s, z_c)
+                        dist_loss += mmd_loss_val
 
-                    # # 直接计算分布对齐损失（均值余弦相似度）
-                    # cosine_loss = 1 - F.cosine_similarity(
-                    #     z_s.mean(dim=0, keepdim=True),
-                    #     z_c.mean(dim=0, keepdim=True)
-                    # ).mean()
-                    # dist_loss += cosine_loss
+                    # === Step 4. 模态间语义对齐 ===
+                    z_proj_dict = {m: self.proj_heads[m](z_m_all[m]) for m in z_m_all.keys()}
+                    align_loss = contrastive_modality_align(z_proj_dict)
 
-                    # ====== 2. MMD（使用你引入的新 MMD 函数） ======
-                    mmd_loss_val = compute_mmd(z_s, z_c)
-                    dist_loss += mmd_loss_val
+                    # === Step 5. 分类训练 ===
+                    z_fuse = self.fusionNet(z_m_all)  # B,W,D
+                    # z_fuse_all.append(z_fuse) # 这里不需要存了
+                    
+                    y_true = torch.from_numpy(labels[:, idx_start:idx_end]).to(self.device).flatten().long()
+                    logits = self.cf_model_server(z_fuse)
+                    
+                    cls_loss = self.cls_loss_fn(logits, y_true)
 
-                    # # 相似度矩阵
-                    # sim = torch.matmul(z_s, z_c.T) / tau   # [B, B]
-                    # labels = torch.arange(B).to(sim.device)
-                    # loss_contrast = F.cross_entropy(sim, labels)
-                    # dist_loss += loss_contrast
+                    # 更新 Logits Bank
+                    for cls_id in y_true.unique():
+                        cls_mask = (y_true == cls_id)
+                        if cls_mask.sum() > 0:
+                            logits_cls = logits[cls_mask].mean(dim=0)
+                            if not hasattr(self, "logits_bank"):
+                                self.logits_bank = {}
+                            if cls_id.item() not in self.logits_bank:
+                                self.logits_bank[cls_id.item()] = logits_cls.clone().detach()
+                            else:
+                                self.logits_bank[cls_id.item()] = (
+                                    0.5 * self.logits_bank[cls_id.item()] + 0.5 * logits_cls.clone().detach()
+                                )
 
-                # === Step 4. 模态加权融合 ===
-                # weight_tensor = torch.stack([self.modality_weight[m] for m in z_m_all.keys()])  # [M]
-                # weight_norm = torch.softmax(weight_tensor, dim=0)
+                    # === Step 6. 总损失 ===
+                    total_loss = (
+                        self.server_dist_weight * dist_loss +
+                        self.server_align_weight * align_loss +
+                        1.0 * cls_loss
+                    )
 
-                # z_global = sum(weight_norm[i] * z_m_all[m] for i, m in enumerate(z_m_all.keys()))  # [B, D]
+                    total_loss.backward()
+                    self.optimizer_ae.step()
+                    self.optimizer_cf.step()
+                
+                print(f"[Server Train] Distill={dist_loss:.4f} Align={align_loss:.4f} Cls={cls_loss:.4f}")
 
-                # === Step 4. 模态间语义对齐 ===
-                # 对齐
-                # z_proj = [self.proj_heads[m](z_m_all[m]) for m in z_m_all.keys()]
-                # z_center = torch.stack(z_proj).mean(dim=0)
-                # # align_loss = sum(F.mse_loss(z_proj[i], z_center) for i in range(len(z_proj)))
-                z_proj_dict = {m: self.proj_heads[m](z_m_all[m]) for m in z_m_all.keys()}
-                align_loss = contrastive_modality_align(z_proj_dict)
+            # 记录损失日志
+            self.server_loss_history['distill_loss'].append(dist_loss.item())
+            self.server_loss_history['cls_loss'].append(cls_loss.item())
+            self.server_loss_history['total_loss'].append(total_loss.item())
 
-                # === Step 5. 分类训练 ===
-                # z_fuse = torch.cat([z for z in z_m_all.values()], dim=-1)
+            # =======re-extract
+            
+            self.ae_model_server.eval() # 切换到评估模式提取特征
+            
+            h_te_accumulators = {m: [] for m in self.modalities_server}
+        
+            with torch.no_grad():                
+                seq_len_total = modalities_seq[self.modalities_server[0]].shape[1]
+                win_len_extract = 32
+                
+                idx_start = 0
+                while idx_start < seq_len_total:
+                    idx_end = min(idx_start + win_len_extract, seq_len_total)
+                    if idx_end - idx_start < 8: 
+                        break
+                    
+                    # 对每个模态分别进行编码
+                    for m in self.modalities_server:
+                        x_chunk = torch.from_numpy(modalities_seq[m][:, idx_start:idx_end, :]).float().to(self.device)    
+                        _, z_chunk = self.ae_model_server.encode(x_chunk, m) # 假设返回 [B, T, D]                  
+                        # 在时间维度平均 -> [B, D]
+                        z_mean = z_chunk.mean(dim=1)
+                        h_te_accumulators[m].append(z_mean)
+                    
+                    idx_start += win_len_extract
 
-                z_fuse = self.fusionNet(z_m_all)  # B,W,D
-                z_fuse_all.append(z_fuse)
-                y_true = torch.from_numpy(labels[:, idx_start:idx_end]).to(self.device).flatten().long()
+            global_semantic_anchors = {}
+            
+            for m in self.modalities_server:
+                if len(h_te_accumulators[m]) > 0:
+                    # 1. 拼接所有 batch: [N_total, D]
+                    z_cat = torch.cat(h_te_accumulators[m], dim=0)
+                    # 2. 对所有样本求均值 -> [D]
+                    z_anchor = z_cat.mean(dim=0).detach().cpu()
+                    global_semantic_anchors[m] = z_anchor
+                else:
+                    global_semantic_anchors[m] = torch.zeros(self.rep_size).cpu()
+            return global_semantic_anchors, None, self.logits_bank
+    
+            # z_global_list = []
+            # with torch.no_grad():
+            #     win_len_extract = 32
+            #     seq_len_total = modalities_seq[self.modalities_server[0]].shape[1]
+                
+            #     idx_start = 0
+            #     while idx_start < seq_len_total:
+            #         idx_end = min(idx_start + win_len_extract, seq_len_total)
+            #         if idx_end - idx_start < 8: # 忽略太短的尾部
+            #             break
+                    
+            #         z_m_batch = {}
+            #         for m in self.modalities_server:
+            #             x_chunk = torch.from_numpy(modalities_seq[m][:, idx_start:idx_end, :]).float().to(self.device)
+            #             _, z_chunk = self.ae_model_server.encode(x_chunk, m)
+            #             z_m_batch[m] = z_chunk # [B, T, D]
+                    
+            #         # 融合
+            #         z_fuse_chunk = self.fusionNet(z_m_batch) # [B, T, D]
+                    
+            #         # 在时间维度平均，得到 [B, D]
+            #         z_fuse_mean = z_fuse_chunk.mean(dim=1) 
+            #         z_global_list.append(z_fuse_mean)
+                    
+            #         idx_start += win_len_extract
+            # if len(z_global_list) > 0:
+            #     z_global_final = torch.cat(z_global_list, dim=0).mean(dim=0).detach().cpu()
+            # else:
+            #     z_global_final = torch.zeros(self.rep_size).cpu() # 假设你有 self.rep_size
 
-                logits = self.cf_model_server(z_fuse)
-                # logits = self.cf_model_server(z_global)
-
-                # print(logits.shape,y_true.shape)
-                cls_loss = self.cls_loss_fn(logits, y_true)
-
-                for cls_id in y_true.unique():
-                    cls_mask = (y_true == cls_id)
-                    if cls_mask.sum() > 0:
-                        logits_cls = logits[cls_mask].mean(dim=0)
-                        # 累加到全局平均表
-                        if not hasattr(self, "logits_bank"):
-                            self.logits_bank = {}
-                        if cls_id.item() not in self.logits_bank:
-                            self.logits_bank[cls_id.item()] = logits_cls.clone().detach()
-                        else:
-                            self.logits_bank[cls_id.item()] = (
-                                0.5 * self.logits_bank[cls_id.item()] + 0.5 * logits_cls.clone().detach()
-                            )
-
-                # === Step 6. 总损失 ===
-                total_loss = (
-                    self.server_dist_weight * dist_loss +
-                    self.server_align_weight * align_loss +
-                    1.0 * cls_loss
-                )
-
-                total_loss.backward()
-                self.optimizer_ae.step()
-                self.optimizer_cf.step()
-            print(f"[Server Train] Distill={dist_loss:.4f} Align={align_loss:.4f} Cls={cls_loss:.4f}")
-
-            # z_global_center = z_center.mean(dim=0).detach()  # 跨batch平均
-
-        self.server_loss_history['distill_loss'].append(dist_loss.item())
-        # self.server_loss_history['align_loss'].append(align_loss.item())
-        self.server_loss_history['cls_loss'].append(cls_loss.item())
-        self.server_loss_history['total_loss'].append(total_loss.item())
-        # self.server_loss_history['proto_loss'].append(proto_loss.item())
-
-        # print(z_global_center.shape, "111")
-
-        # with torch.no_grad():
-        #     modalities_seq, _ = make_seq_batch2(self.server_train_data, self.batch_size)
-        #     # 一次性取全量窗口
-        #     z_m_all = {}
-        #     for m in self.modalities_server:
-        #         x_m = torch.from_numpy(modalities_seq[m]).float().to(self.device)  # [B, T, D_m]
-        #         _, z_m = self.ae_model_server.encode(x_m, m)
-        #         z_m_all[m] = z_m.mean(dim=1)  # [B, D]
-
-        #     # 加权融合
-        #     weight_tensor = torch.stack([self.modality_weight[m] for m in z_m_all.keys()])
-        #     weight_norm = torch.softmax(weight_tensor, dim=0)
-        #     z_global_final = sum(weight_norm[i] * z_m_all[m] for i, m in enumerate(z_m_all.keys()))  # [B, D]
-
-        # return z_global_center.mean(dim=0), global_prototypes, self.logits_bank
-        # return z_global_center.mean(dim=0), None, self.logits_bank
-        # return z_global.mean(dim=1).detach().cpu(), None, self.logits_bank
-        return torch.cat(z_fuse_all, dim=1).mean(dim=1).detach(), None, self.logits_bank
+            # return z_global_final, None, self.logits_bank
 
     def train(self):
         for glob_iter in range(self.num_glob_iters):

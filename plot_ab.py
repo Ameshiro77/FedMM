@@ -60,8 +60,13 @@ plt.rcParams['axes.unicode_minus'] = False
 
 def plot_radar_chart(dataset, dist_results, save_dir):
     """
-    绘制超参数对比雷达图 (大字体 + LaTeX 标签版)
+    绘制超参数对比雷达图 
+    (Times New Roman + 图例强制左上角 + 标签超大字体)
     """
+    # === 0. 字体强制设置 (Times New Roman) ===
+    plt.rcParams['font.family'] = 'Times New Roman'
+    plt.rcParams['mathtext.fontset'] = 'stix' 
+    
     # === 1. 数据提取 ===
     labels = []
     server_accs = []
@@ -74,68 +79,66 @@ def plot_radar_chart(dataset, dist_results, save_dir):
         s_acc = rec["server_acc_curve"][-1] if rec["server_acc_curve"] else 0.0
         c_acc = rec.get("client_avg_acc", 0.0)
         
-        # === 【核心修改点】 生成 LaTeX 格式标签 ===
-        # 1. 提取纯数值字符串 (例如 "0.1")
+        # 生成 LaTeX 格式标签
         value_str = key.replace(f"{dataset}_", "").replace("fedprop_serverdist_", "").replace(".json", "")
-        
-        # 2. 包装成 LaTeX 格式
-        # 注意：f-string 中使用 LaTeX 的花括号需要双写 {{ }} 进行转义
-        # r 表示 raw string，处理反斜杠
         tex_label = fr"$\lambda^S_{{dist}}={value_str}$"
         labels.append(tex_label)
-        # ========================================
 
         server_accs.append(s_acc)
         client_accs.append(c_acc)
 
-    # 数据准备
+    # 闭合圆环
     plot_s_accs = server_accs
     plot_c_accs = client_accs
     
     num_vars = len(labels)
     angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
     
-    # 闭合圆环
     plot_s_accs = np.concatenate((plot_s_accs, [plot_s_accs[0]]))
     plot_c_accs = np.concatenate((plot_c_accs, [plot_c_accs[0]]))
     angles += [angles[0]]
     labels += [labels[0]]
 
-    # === 绘图设置 (保持大字体优化) ===
-    # 适当增加画布宽度以容纳更长的标签
-    fig, ax = plt.subplots(figsize=(11, 10), subplot_kw=dict(polar=True))
+    # === 2. 绘图设置 (继续增大画布) ===
+    # figsize 设大一点，防止大字体被裁掉
+    fig, ax = plt.subplots(figsize=(15, 13), subplot_kw=dict(polar=True))
 
-    # Server Acc
-    ax.plot(angles, plot_s_accs, color='#1f77b4', linewidth=3, linestyle='-', marker='o', markersize=8, label='Server Acc')
+    # --- 绘制线条 (加粗) ---
+    ax.plot(angles, plot_s_accs, color='#1f77b4', linewidth=6, linestyle='-', 
+            marker='o', markersize=14, label='Server Accuracy')
     ax.fill(angles, plot_s_accs, color='#1f77b4', alpha=0.15)
 
-    # Client Avg Acc
-    ax.plot(angles, plot_c_accs, color='#ff7f0e', linewidth=3, linestyle='--', marker='s', markersize=8, label='Client Avg Acc')
+    ax.plot(angles, plot_c_accs, color='#ff7f0e', linewidth=6, linestyle='--', 
+            marker='s', markersize=14, label='Average Client Accuracy')
     ax.fill(angles, plot_c_accs, color='#ff7f0e', alpha=0.15)
 
-    # 设置外圈标签 (使用 LaTeX 格式)
-    # fontsize 稍微调小一点点以防标签过长重叠，或者增加 padding
-    ax.set_thetagrids(np.degrees(angles[:-1]), labels[:-1], fontsize=16)
-    # 增加标签与图表的距离 (padding)
-    ax.tick_params(axis='x', pad=20)
+    # --- 3. 字体设置 (其余字体再变大) ---
+    
+    # 外圈标签 (LaTeX 参数) - 从 28 增大到 34
+    ax.set_thetagrids(np.degrees(angles[:-1]), labels[:-1], fontsize=34)
+    ax.tick_params(axis='x', pad=45) # 间距拉大
 
-    # 设置径向刻度字号
-    ax.tick_params(axis='y', labelsize=14) 
+    # 径向刻度 (中间的数字) - 从 22 增大到 28
+    ax.tick_params(axis='y', labelsize=28) 
     
-    # 标题和图例
-    # ax.set_title(f"Hyper-parameter Trade-off on {dataset}", fontsize=22, weight='bold', y=1.18)
-    ax.legend(loc='upper right', bbox_to_anchor=(1.25, 1.15), fontsize=16, frameon=True)
+    # --- 4. 图例设置 (强制左上角) ---
+    # 保持字体 26 不变
+    # bbox_to_anchor=(-0.25, 1.15): 这里的坐标是相对于 Axes 框的
+    # (0, 1) 是 Axes 左上角，(-0.25, 1.15) 会把图例推到画布的更左上角位置
+    ax.legend(loc='upper left', bbox_to_anchor=(-0.25, 1.15), fontsize=26, frameon=True)
     
-    ax.grid(True, linestyle='--', alpha=0.7, linewidth=1.5)
+    # 网格线加粗
+    ax.grid(True, linestyle='--', alpha=0.7, linewidth=3.0)
 
     save_path = os.path.join(save_dir, f"{dataset}_dist_radar.pdf")
     
-    # 使用 tight_layout 并增加一些 padding 确保长标签不被裁切
-    plt.tight_layout(pad=1.0)
+    # 使用 tight_layout 自动调整布局，但增加 rect 参数留出顶部空间给图例
+    # rect=[left, bottom, right, top]
+    plt.tight_layout(pad=3.0, rect=[0, 0, 1, 0.95])
     plt.savefig(save_path, dpi=300)
     plt.close()
 
-    print(f"[Saved] Radar Chart (LaTeX Labels) => {save_path}")
+    print(f"[Saved] Radar Chart (Left-Top Legend/Huge Fonts) => {save_path}")
 
 # ... (run_one 和 main 函数保持不变，此处省略) ...
 

@@ -15,10 +15,10 @@ file_method_map = {
     "fedavg":   "FedAvg",
     "fedprox":  "FedProx",
     "fedproto": "FedProto",
-    "fedmekt":  "FedMEKT",
     # "fedab":    "FedAB",
     # "fedpropgen": "FedPropGEN",
     "feddtg":   "FedDTG",
+    "fedmekt":  "FedMEKT",
     "fedprop":  "FedProp",
 }
 

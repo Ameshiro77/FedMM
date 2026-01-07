@@ -10,9 +10,18 @@
 #     --local_epochs 2 \
 #     --numusers 0.5 \
 #     --algo fedprop
-    
+
+# python main.py \
+#     --dataset opp \
+#     --global_rounds 100 \
+#     --local_epochs 2 \
+#     --numusers 0.5 \
+#     --optimizer Adam \
+#     --algo fedprop \
+#     --pfl
+
 python main.py \
-    --dataset opp \
+    --dataset ur_fall \
     --global_rounds 200 \
     --local_epochs 2 \
     --numusers 0.5 \

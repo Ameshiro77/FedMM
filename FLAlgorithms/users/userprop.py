@@ -150,54 +150,47 @@ class UserProp(User):
 
                     orth_loss += current_orth
 
+                    # if global_share is not None:
+                    #     z_global_srv = global_share.detach().to(self.device)
+                    #     # print(z_global_srv.shape,z_share.shape)
+                    #     cos_sim = F.cosine_similarity(z_share, z_global_srv, dim=1)
+                    #     align_loss_term = 1 - cos_sim.mean()
+                    #     align_loss += align_loss_term
+
+                    # =========================================================
+                    # === 3. 对齐损失 (Alignment Loss) - 新旧逻辑兼容 ===
+                    # =========================================================
                     if global_share is not None:
-                        z_global_srv = global_share.detach().to(self.device)
-                        # print(z_global_srv.shape,z_share.shape)
-                        cos_sim = F.cosine_similarity(z_share, z_global_srv, dim=1)
-                        align_loss_term = 1 - cos_sim.mean()
-                        align_loss += align_loss_term
-
-                    # 3. 对齐损失 (核心优化：伪标签对齐)
-                    # current_align = 0.0
-                    # use_pseudo = False
-
-                    # if proto_tensor is not None:
-                    #     with torch.no_grad():
-                    #         z_cat = torch.cat([z_share, z_spec], dim=-1)
-                    #         logits = self.cf_model(z_cat)
-
-                    #         if logits.dim() == 3:
-                    #             logits = logits.reshape(-1, logits.size(-1))
-                    #             z_share_flat = z_share.reshape(-1, z_share.size(-1))
-                    #         else:
-                    #             z_share_flat = z_share
-
-                    #         probs = F.softmax(logits, dim=1)
-                    #         max_probs, preds = torch.max(probs, dim=1)
-
-                    #         mask = max_probs > self.conf_threshold
-
-                    #     if mask.sum() > 0:
-                    #         z_sel = z_share_flat[mask]
-                    #         p_sel = preds[mask]
-                    #         targets = proto_tensor[p_sel]
-
-                    #         cos_sim = F.cosine_similarity(z_sel, targets, dim=1)
-                    #         current_align = 1 - cos_sim.mean()
-                    #         use_pseudo = True
-
-                    # # 4. 兜底：全局均值对齐
-                    # if not use_pseudo and global_share is not None:
-                    #     z_srv = global_share.detach().to(self.device)
-                    #     if z_srv.dim() == 1:
-                    #         z_srv = z_srv.unsqueeze(0).expand_as(z_share)
-                    #     elif z_srv.dim() == 2 and z_share.dim() == 3:
-                    #          z_srv = z_srv.unsqueeze(1).expand_as(z_share)
-
-                    #     cos_sim = F.cosine_similarity(z_share, z_srv, dim=-1)
-                    #     current_align = 1 - cos_sim.mean()
-
-                    # align_loss += current_align
+                        # -----------------------------------------------------
+                        # 【新逻辑】如果传入的是字典，说明是 Modality-Specific Anchors
+                        # -----------------------------------------------------
+                        if isinstance(global_share, dict):
+                            # 只对齐当前模态 m 对应的锚点
+                            if m in global_share:
+                                # 取出该模态的全局锚点 [D]
+                                z_anchor = global_share[m].to(self.device)
+                                
+                                # 处理维度匹配：z_share 可能是 [B, T, D] 或 [B, D]
+                                # 为了计算 cosine similarity，我们需要统一维度 (取时间均值)
+                                if z_share.dim() == 3:
+                                    z_local = z_share.mean(dim=1)
+                                else:
+                                    z_local = z_share
+                                
+                                # 计算余弦相似度 (在特征维度 dim=-1)
+                                # z_local: [B, D], z_anchor: [D] (会自动广播)
+                                cos_sim = F.cosine_similarity(z_local, z_anchor, dim=-1)
+                                align_loss += (1 - cos_sim.mean())
+                        
+                        # -----------------------------------------------------
+                        # 【旧逻辑】如果传入的是 Tensor，说明是 Unified z_fuse
+                        # -----------------------------------------------------
+                        else:
+                            z_global_srv = global_share.detach().to(self.device)
+                            # 原有逻辑：直接计算相似度 (保留你原始代码的 dim=1 设置)
+                            cos_sim = F.cosine_similarity(z_share, z_global_srv, dim=1)
+                            align_loss_term = 1 - cos_sim.mean()
+                            align_loss += align_loss_term
 
                     # 5. 正则化
                     if pre_w is not None:

@@ -122,8 +122,7 @@ class DisentangledLSTMAutoEncoder(nn.Module):
                                    representation_size=representation_size,
                                    num_layers=num_layers,
                                    batch_first=batch_first)
-        
-        # === [修改点 1] 解码器输入维度变了 ===
+
         # 以前只有 specific_size，现在是 shared_size + specific_size
         self.decoder = LSTMDecoder(representation_size=shared_size + specific_size, 
                                    output_size=input_size,
@@ -154,7 +153,7 @@ class DisentangledLSTMAutoEncoder(nn.Module):
     def decode(self, z_share, z_spec, seq_len):
         # 1. 对 z_share 进行梯度缩放 (0.1 表示只接受 10% 的重构梯度)
         # 这样 z_share 只学轮廓，不记噪声
-        z_share_scaled = GradScaler.apply(z_share, 1.0)
+        z_share_scaled = GradScaler.apply(z_share, 0.5)
         
         # 2. 拼接 shared 和 specific
         z_cat = torch.cat([z_share_scaled, z_spec], dim=-1)

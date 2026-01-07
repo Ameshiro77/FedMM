@@ -58,20 +58,20 @@ def get_ablation_settings(exp="ab"):
         return {
             "fedprop":{
                 "server_dist_weight": 0.5,
-                "server_align_weight": 0.05,
+                "server_align_weight": 0.00,
                 "client_orth_weight": 0.1,
                 "client_align_weight": 1.0,
                 "client_reg_weight": 0.01,
                 "client_logits_weight": 0.5,
             },
-            "wo_server_dist": {
-                "server_dist_weight": 0.0,
-                "server_align_weight": 0.05,
-                "client_orth_weight": 0.1,
-                "client_align_weight": 1.0,
-                "client_reg_weight": 0.01,
-                "client_logits_weight": 0.5,
-            },
+            # "wo_server_dist": {
+            #     "server_dist_weight": 0.0,
+            #     "server_align_weight": 0.05,
+            #     "client_orth_weight": 0.1,
+            #     "client_align_weight": 1.0,
+            #     "client_reg_weight": 0.01,
+            #     "client_logits_weight": 0.5,
+            # },
             
             # "wo_server_align": {
             #     "server_dist_weight": 0.8,
