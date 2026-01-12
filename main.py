@@ -22,6 +22,9 @@ EVAL_WIN = 100
 def main(dataset, algorithm, model, batch_size, learning_rate, num_glob_iters,
          local_epochs, optimizer, num_users, client_modalities_dict, times, pfl, args): \
 
+    torch.manual_seed(0)
+    np.random.seed(42)
+    EVAL_WIN = 100
     rs_glob_acc, avg_client_acc, avg_modality_acc = [], 0, {}
     
     if dataset == 'opp':

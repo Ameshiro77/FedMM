@@ -3,8 +3,11 @@ import json
 import glob
 import argparse
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import numpy as np  # 【修改1】引入 numpy 用于计算平滑
 
+font_path = "times.ttf"
+fm.fontManager.addfont(font_path)
 def load_experiment_results(dataset, exp_type="ablation", pfl=False):
     """
     从指定文件夹加载 json：
@@ -61,13 +64,13 @@ plt.rcParams['axes.unicode_minus'] = False
 def plot_radar_chart(dataset, dist_results, save_dir):
     """
     绘制超参数对比雷达图 
-    (Times New Roman + 图例强制左上角 + 标签超大字体)
+    (刻度逆时针旋转10度 + 9x8.5尺寸 + 小图例)
     """
-    # === 0. 字体强制设置 (Times New Roman) ===
+    # === 0. 字体强制设置 ===
     plt.rcParams['font.family'] = 'Times New Roman'
     plt.rcParams['mathtext.fontset'] = 'stix' 
     
-    # === 1. 数据提取 ===
+    # === 1. 数据提取 (保持不变) ===
     labels = []
     server_accs = []
     client_accs = []
@@ -79,7 +82,6 @@ def plot_radar_chart(dataset, dist_results, save_dir):
         s_acc = rec["server_acc_curve"][-1] if rec["server_acc_curve"] else 0.0
         c_acc = rec.get("client_avg_acc", 0.0)
         
-        # 生成 LaTeX 格式标签
         value_str = key.replace(f"{dataset}_", "").replace("fedprop_serverdist_", "").replace(".json", "")
         tex_label = fr"$\lambda^S_{{dist}}={value_str}$"
         labels.append(tex_label)
@@ -99,46 +101,45 @@ def plot_radar_chart(dataset, dist_results, save_dir):
     angles += [angles[0]]
     labels += [labels[0]]
 
-    # === 2. 绘图设置 (继续增大画布) ===
-    # figsize 设大一点，防止大字体被裁掉
-    fig, ax = plt.subplots(figsize=(15, 13), subplot_kw=dict(polar=True))
+    # === 2. 绘图设置 (9x8.5) ===
+    fig, ax = plt.subplots(figsize=(9, 8.5), subplot_kw=dict(polar=True))
 
-    # --- 绘制线条 (加粗) ---
-    ax.plot(angles, plot_s_accs, color='#1f77b4', linewidth=6, linestyle='-', 
-            marker='o', markersize=14, label='Server Accuracy')
+    # --- 绘制线条 ---
+    ax.plot(angles, plot_s_accs, color='#1f77b4', linewidth=5, linestyle='-', 
+            marker='o', markersize=12, label='Server Accuracy')
     ax.fill(angles, plot_s_accs, color='#1f77b4', alpha=0.15)
 
-    ax.plot(angles, plot_c_accs, color='#ff7f0e', linewidth=6, linestyle='--', 
-            marker='s', markersize=14, label='Average Client Accuracy')
+    ax.plot(angles, plot_c_accs, color='#ff7f0e', linewidth=5, linestyle='--', 
+            marker='s', markersize=12, label='Average Client Accuracy')
     ax.fill(angles, plot_c_accs, color='#ff7f0e', alpha=0.15)
 
-    # --- 3. 字体设置 (其余字体再变大) ---
+    # === 3. 字体与刻度设置 ===
     
-    # 外圈标签 (LaTeX 参数) - 从 28 增大到 34
-    ax.set_thetagrids(np.degrees(angles[:-1]), labels[:-1], fontsize=34)
-    ax.tick_params(axis='x', pad=45) # 间距拉大
+    # 3.1 外圈标签
+    ax.set_thetagrids(np.degrees(angles[:-1]), labels[:-1], fontsize=28)
+    ax.tick_params(axis='x', pad=15) 
 
-    # 径向刻度 (中间的数字) - 从 22 增大到 28
-    ax.tick_params(axis='y', labelsize=28) 
+    # 3.2 径向刻度 (中间的数字)
+    # 【核心修改】：逆时针旋转 10 度 (Matplotlib 极坐标默认逆时针为正)
+    # 这样数字就会从正右方(0度)往上挪一点，避开轴线
+    ax.set_rlabel_position(10)  
     
-    # --- 4. 图例设置 (强制左上角) ---
-    # 保持字体 26 不变
-    # bbox_to_anchor=(-0.25, 1.15): 这里的坐标是相对于 Axes 框的
-    # (0, 1) 是 Axes 左上角，(-0.25, 1.15) 会把图例推到画布的更左上角位置
-    ax.legend(loc='upper left', bbox_to_anchor=(-0.25, 1.15), fontsize=26, frameon=True)
+    # 恢复正常的字号设置，去掉之前的 zorder/bbox hack
+    ax.tick_params(axis='y', labelsize=22) 
+
+    # --- 4. 图例设置 (小字体 18) ---
+    ax.legend(loc='upper left', bbox_to_anchor=(-0.15, 1.15), fontsize=18, frameon=True)
     
-    # 网格线加粗
-    ax.grid(True, linestyle='--', alpha=0.7, linewidth=3.0)
+    # 网格线
+    ax.grid(True, linestyle='--', alpha=0.7, linewidth=2.5)
 
     save_path = os.path.join(save_dir, f"{dataset}_dist_radar.pdf")
     
-    # 使用 tight_layout 自动调整布局，但增加 rect 参数留出顶部空间给图例
-    # rect=[left, bottom, right, top]
-    plt.tight_layout(pad=3.0, rect=[0, 0, 1, 0.95])
+    plt.tight_layout(pad=1.2)
     plt.savefig(save_path, dpi=300)
     plt.close()
 
-    print(f"[Saved] Radar Chart (Left-Top Legend/Huge Fonts) => {save_path}")
+    print(f"[Saved] Radar Chart (Rotated rlabels 10 deg) => {save_path}")
 
 # ... (run_one 和 main 函数保持不变，此处省略) ...
 
