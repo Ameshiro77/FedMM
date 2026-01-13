@@ -1,12 +1,9 @@
 from FLAlgorithms.users.userbase import User
-# from FLAlgorithms.servers.serverbase_dem import Dem_Server
 from FLAlgorithms.servers.serverbase import Server
 from utils.model_utils import *
-from torch.utils.data import DataLoader
 import numpy as np
 from FLAlgorithms.users.userprop import *
 import json
-import codecs
 from FLAlgorithms.trainmodel.ae_model import *
 from FLAlgorithms.trainmodel.losses import *
 from torch import nn, optim

@@ -161,12 +161,58 @@ def main(dataset, algorithm, model, batch_size, learning_rate, num_glob_iters,
 
         server.reset()
         
+        
         if algorithm.lower() == "fedprop" and args.ablation:
             rs_glob_acc, avg_client_acc, avg_modality_acc = server.train()
+            
+            # === 保存逻辑 (完美复刻 ablation.py) ===
+            if args.ablation_name:
+                scheme_name = args.ablation_name
+                
+                # 1. 路径映射字典
+                dir_dict = {
+                    "ab": "ablation",
+                    "dist": "hyper_dist",
+                    "align": "hyper_align"
+                }
+                # 获取输出文件夹名
+                out_dir = dir_dict.get(args.exp_type, "ablation")
+                
+                # 2. 拼接路径 (考虑 pfl)
+                if pfl:
+                    save_dir = f"./results/pfl/{out_dir}"
+                else:
+                    save_dir = f"./results/{out_dir}"
+                
+                os.makedirs(save_dir, exist_ok=True)
+                
+                # 3. 构造文件名
+                # 原代码：scheme.replace(" ", "_")，虽然这里一般没空格，保留逻辑
+                safe_scheme_name = scheme_name.replace(" ", "_")
+                save_path = os.path.join(save_dir, f"{dataset}_{safe_scheme_name}_ab.json")
+                
+                record = {
+                    "scheme": scheme_name,
+                    "dataset": dataset,
+                    "server_acc_curve": rs_glob_acc,
+                    "client_avg_acc": avg_client_acc,
+                    "modality_acc": avg_modality_acc
+                }
+                
+                with open(save_path, "w") as f:
+                    json.dump(record, f, indent=4)
+                print(f"[Saved] Ablation JSON => {save_path}")
+
         else:
             server.train()
         
     return rs_glob_acc, avg_client_acc, avg_modality_acc
+    #     if algorithm.lower() == "fedprop" and args.ablation:
+    #         rs_glob_acc, avg_client_acc, avg_modality_acc = server.train()
+    #     else:
+    #         server.train()
+        
+    # return rs_glob_acc, avg_client_acc, avg_modality_acc
 
 
 if __name__ == "__main__":
@@ -185,6 +231,19 @@ if __name__ == "__main__":
     parser.add_argument("--times", type=int, default=1, help="running time")
     parser.add_argument("--global_rounds", type=int, default=100, help="Number of global rounds")
     parser.add_argument("--pfl", default=False, action='store_true')
+    
+    # === 【新增】消融实验专用参数 (以前你是硬编码的，现在要暴露出来) ===
+    parser.add_argument("--server_dist_weight", type=float, default=0.5)
+    parser.add_argument("--server_align_weight", type=float, default=0.0)
+    parser.add_argument("--client_orth_weight", type=float, default=0.1)
+    parser.add_argument("--client_align_weight", type=float, default=1.0)
+    parser.add_argument("--client_reg_weight", type=float, default=0.01)
+    parser.add_argument("--client_logits_weight", type=float, default=0.5)
+    
+    # === 【新增】用于标记这次运行是不是消融，以及消融的名字 ===
+    parser.add_argument("--ablation_name", type=str, default="", help="If set, saves to ablation folder")
+    parser.add_argument("--exp_type", type=str, default="ab", choices=["ab", "dist", "align"])
+    
     args = parser.parse_args()
 
     print("=" * 80)
@@ -199,31 +258,31 @@ if __name__ == "__main__":
     print("Local Model       : {}".format(args.model))
     print("=" * 80)
 
-    # client_modalities_dict = {
-    #     "mhealth": [10, 10, 10],
-    #     "opp": [15, 15],
-    #     "ur_fall": [10, 10, 10]
-    # }
     client_modalities_dict = {
-        "mhealth": [5, 5, 5],
-        "opp": [5, 5],
-        "ur_fall": [5, 5, 5],
-        "uci_har": [5, 5],
-        "hapt": [5, 5],
-        "pamap2": [5, 5, 5]
+        "mhealth": [10, 10, 10],
+        "opp": [15, 15],
+        "ur_fall": [10, 10, 10]
     }
+    # client_modalities_dict = {
+    #     "mhealth": [5, 5, 5],
+    #     "opp": [5, 5],
+    #     "ur_fall": [5, 5, 5],
+    #     "uci_har": [5, 5],
+    #     "hapt": [5, 5],
+    #     "pamap2": [5, 5, 5]
+    # }
 
-    args.numusers = 0.5
+    # === 【逻辑修改】根据是否传入 ablation_name 来设置 args.ablation ===
+    if args.ablation_name:
+        args.ablation = True # 开启消融模式逻辑
+    else:
+        args.ablation = False
 
-    args.server_dist_weight = 0.5
-    args.server_align_weight =0.0
-    
-    args.client_orth_weight = 0.1
-    args.client_align_weight = 1.0
-    args.client_reg_weight = 0.01
-    args.client_logits_weight = 0.5
-
-    args.ablation = False
+    print("=" * 80)
+    print(f"Algorithm: {args.algo}")
+    print(f"Ablation Name: {args.ablation_name if args.ablation_name else 'None'}")
+    print(f"Weights -> Dist:{args.server_dist_weight}, Align:{args.server_align_weight}, Logits:{args.client_logits_weight}")
+    print("=" * 80)
     
     main(
         dataset=args.dataset,

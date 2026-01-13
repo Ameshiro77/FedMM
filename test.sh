@@ -26,5 +26,5 @@ python main.py \
     --local_epochs 2 \
     --numusers 0.5 \
     --optimizer Adam \
-    --algo fedprop \
+    --algo fedab \
     --pfl
