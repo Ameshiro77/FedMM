@@ -447,7 +447,7 @@ class Server:
 
         pass
 
-    def test_clients(self, save=False):
+    def test_clients(self, save=True):
         client_accs = []
         modality_accs = {}   # {mod_name: [acc1, acc2, ...]}
 

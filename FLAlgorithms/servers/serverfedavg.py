@@ -65,7 +65,7 @@ class FedAvg(Server):
 
             
 
-            for user in self.users:
+            for user in self.selected_users:
                 user.train_cf()
 
             # self.train()

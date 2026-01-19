@@ -89,7 +89,8 @@ class FedProto(Server):
 
      
             proto_dicts = []
-            for user in self.users:
+            self.selected_users = self.select_users(glob_iter, self.num_users)
+            for user in self.selected_users:
                 proto, weights = user.upload_prototype()
                 proto_dicts.append((proto, weights))
 
@@ -97,7 +98,7 @@ class FedProto(Server):
             self.global_prototypes = self.aggregate_prototypes(proto_dicts)
 
             # ------- Step 3: 客户端使用 global prototype 训练 classifier -------
-            for user in self.users:
+            for user in self.selected_users:
                 user.train_cf_proto(self.global_prototypes)
 
             self.train_classifier()  # freeze

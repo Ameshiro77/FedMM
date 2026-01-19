@@ -4,13 +4,13 @@
 # ent_coef norm_xi LSTM
 #ALGOS=("fedprop" "fedprox" "fedcent" "fedmekt" "fedproto" "fedavg")
 
-COMMON_ARGS="\
-    --dataset ur_fall \
-    --local_epochs 2 \
-    --optimizer Adam \
-    --numusers 0.5 \
-    --global_rounds 200 \
-    --pfl "
+# COMMON_ARGS="\
+#     --dataset ur_fall \
+#     --local_epochs 2 \
+#     --optimizer Adam \
+#     --numusers 0.5 \
+#     --global_rounds 200 \
+#     --pfl "
 
 
 # COMMON_ARGS="\
@@ -21,16 +21,17 @@ COMMON_ARGS="\
 #     --pfl \
 #     --global_rounds 100 "
 
-# COMMON_ARGS="\
-#     --dataset opp \
-#     --local_epochs 2 \
-#     --optimizer Adam \
-#     --numusers 0.5 \
-#     --pfl \
-#     --global_rounds 100 "
+COMMON_ARGS="\
+    --dataset opp \
+    --local_epochs 2 \
+    --optimizer Adam \
+    --numusers 0.5 \
+    --pfl \
+    --global_rounds 100 "
 
 # ALGOS=("fedprox" "fedavg" "fedprop")
-ALGOS=("fedprox" "fedmekt" "fedproto" "fedavg" "fedcent" "feddtg" )
+ALGOS=("fedproto" "fedprop")
+# ALGOS=("fedprox" "fedmekt" "fedproto" "fedavg" "fedcent" "feddtg" "fedprop")
 
 for algo in "${ALGOS[@]}"; do
     echo "Running algorithm: $algo"

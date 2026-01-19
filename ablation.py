@@ -54,66 +54,58 @@ def get_ablation_settings(exp="ab"):
 
     if exp == "ab":
         return {
-            "fedprop":{
-                "server_dist_weight": 0.5,
-                "server_align_weight": 0.00,
-                "client_orth_weight": 0.1,
-                "client_align_weight": 1.0,
-                "client_reg_weight": 0.01,
-                "client_logits_weight": 0.5,
-            },
-            "wo_server_dist": {
-                "server_dist_weight": 0.0,
-                "server_align_weight": 0.05,
-                "client_orth_weight": 0.1,
-                "client_align_weight": 1.0,
-                "client_reg_weight": 0.01,
-                "client_logits_weight": 0.5,
-            },
-            
-            # "wo_server_align": {
-            #     "server_dist_weight": 0.8,
-            #     "server_align_weight": 0.0,
+            # "fedprop":{
+            #     "server_dist_weight": 0.1,
+            #     "server_align_weight": 0.00,
             #     "client_orth_weight": 0.1,
-            #     "client_align_weight": 1.0,
+            #     "client_align_weight": 0.7,
+            #     "client_reg_weight": 0.01,
+            #     "client_logits_weight": 0.5,
+            # },
+            # "wo_server_dist": {
+            #     "server_dist_weight": 0.0,
+            #     "server_align_weight": 0.05,
+            #     "client_orth_weight": 0.1,
+            #     "client_align_weight": 0.7,
             #     "client_reg_weight": 0.01,
             #     "client_logits_weight": 0.5,
             # },
 
-            "wo_client_align": {
-                "server_dist_weight": 0.5,
-                "server_align_weight": 0.0,
-                "client_orth_weight": 0.1,
-                "client_align_weight": 0.0,
-                "client_reg_weight": 0.01,
-                "client_logits_weight": 0.5,
-            },
 
-            "wo_client_dist": {
-                "server_dist_weight": 0.5,
-                "server_align_weight": 0.0,
-                "client_orth_weight": 0.1,
-                "client_align_weight": 1.0,
-                "client_reg_weight": 0.01,
-                "client_logits_weight": 0.0,
-            },
+            # "wo_client_align": {
+            #     "server_dist_weight": 0.1,
+            #     "server_align_weight": 0.0,
+            #     "client_orth_weight": 0.1,
+            #     "client_align_weight": 0.0,
+            #     "client_reg_weight": 0.01,
+            #     "client_logits_weight": 0.5,
+            # },
+
+            # "wo_client_dist": {
+            #     "server_dist_weight": 0.1,
+            #     "server_align_weight": 0.0,
+            #     "client_orth_weight": 0.1,
+            #     "client_align_weight": 0.7,
+            #     "client_reg_weight": 0.01,
+            #     "client_logits_weight": 0.0,
+            # },
             
-            "wo_client_dyn": {
-                "server_dist_weight": 0.5,
-                "server_align_weight": 0.0,
-                "client_orth_weight": 0.1,
-                "client_align_weight": 1.0,
-                "client_reg_weight": 0.01,
-                "client_logits_weight": -1.0,
-            },
+            # "wo_client_dyn": {
+            #     "server_dist_weight": 0.1,
+            #     "server_align_weight": 0.0,
+            #     "client_orth_weight": 0.1,
+            #     "client_align_weight": 0.7,
+            #     "client_reg_weight": 0.01,
+            #     "client_logits_weight": -1.0,
+            # },
 
 
             "wo_client_ab": {
                 "algo": "fedab",
-                "server_dist_weight": 1.0,
-                "server_align_weight": 0.05,
+                "server_dist_weight": 0.1,
+                "server_align_weight": 0.00,
                 "client_orth_weight": 0.1,
-                "client_align_weight": 1.0,
+                "client_align_weight": 0.7,
                 "client_reg_weight": 0.01,
                 "client_logits_weight": 0.5,
             }
@@ -284,11 +276,12 @@ def run_ablation():
     parser.add_argument("--exp", type=str, default="ab", choices=["ab", "dist", "align"], help="Experiment type")
     # 你甚至可以把 dataset 也做成参数
     parser.add_argument("--dataset", type=str, default="ur_fall")
+    parser.add_argument("--label_ratio", type=float, default=0.1, help="")
     args = parser.parse_args()
     exp_type = args.exp
-
+    label_ratio = args.label_ratio
     # === 全局设置 ===
-    dataset = "ur_fall"
+    dataset = args.dataset
     global_rounds = 200 if dataset == "ur_fall" else 100
     optimizer = "Adam" # 显式指定，确保和 main 默认一致或覆盖
 
@@ -311,6 +304,7 @@ def run_ablation():
             "--pfl", # 加上这个标志
             "--ablation_name", scheme_name, 
             "--exp_type", exp_type,
+            "--label_ratio", str(label_ratio),
             # 从字典里提取参数
             "--algo", params.get("algo", "FedProp"), 
             "--server_dist_weight", str(params.get("server_dist_weight", 0.5)),
@@ -335,79 +329,4 @@ def run_ablation():
 
 if __name__ == "__main__":
     run_ablation()
-    # import copy
-
-    # import torch
-    # import numpy as np
-    # torch.manual_seed(0)
-    # np.random.seed(42)
-    # EVAL_WIN = 100
-    # torch.backends.cudnn.enabled = False
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument("--dataset", type=str, default="opp")
-    # parser.add_argument("--algo", type=str, default="FedProp")
-    # parser.add_argument("--model", type=str, default="dnn")
-    # parser.add_argument("--batch_size", type=int, default=64)
-    # parser.add_argument("--learning_rate", type=float, default=0.001)
-    # parser.add_argument("--global_rounds", type=int, default=100)
-    # parser.add_argument("--local_epochs", type=int, default=2)
-    # parser.add_argument("--optimizer", type=str, default="Adam")
-    # parser.add_argument("--numusers", type=float, default=0.5)
-    # parser.add_argument("--times", type=int, default=1)
-    # parser.add_argument("--exp", type=str, default="ab")
-
-    # args = parser.parse_args()
-
-    # # === 标记为消融模式 ===
-    # args.ablation = True
-    # args.pfl = True
-
-    # client_modalities_dict = {
-    #     "mhealth": [5, 5, 5],
-    #     "opp": [5, 5],
-    #     "ur_fall": [5, 5, 5],
-    #     "uci_har": [5, 5],
-    #     "hapt": [5, 5],
-    #     "pamap2": [5, 5, 5]
-    # }
-
-    # ablations = get_ablation_settings(args.exp)
-
-    # if args.dataset == "ur_fall":
-    #     args.global_rounds = 200
-
-    # for scheme_name, weights in ablations.items():
-    #     print("=" * 80)
-    #     print(f"Running ablation: {scheme_name}")
-    #     print(weights)
-
-    #     ab_args = copy.deepcopy(args)
-
-    #     for k, v in weights.items():
-    #         setattr(ab_args, k, v)
-
-    #     rs_glob_acc, avg_client_acc, avg_modality_acc = main(
-    #         dataset=ab_args.dataset,
-    #         algorithm=ab_args.algo,
-    #         model=ab_args.model,
-    #         batch_size=ab_args.batch_size,
-    #         learning_rate=ab_args.learning_rate,
-    #         num_glob_iters=ab_args.global_rounds,
-    #         local_epochs=ab_args.local_epochs,
-    #         optimizer=ab_args.optimizer,
-    #         num_users=ab_args.numusers,
-    #         client_modalities_dict=client_modalities_dict,
-    #         times=1,
-    #         pfl=ab_args.pfl,
-    #         args=ab_args
-    #     )
-
-    #     save_ablation_json(
-    #         dataset=ab_args.dataset,
-    #         scheme=scheme_name,
-    #         rs_glob_acc=rs_glob_acc,
-    #         avg_client_acc=avg_client_acc,
-    #         avg_modality_acc=avg_modality_acc,
-    #         pfl=ab_args.pfl,
-    #         exp=args.exp
-    #     )
+    

@@ -26,6 +26,7 @@ def main(dataset, algorithm, model, batch_size, learning_rate, num_glob_iters,
     np.random.seed(42)
     EVAL_WIN = 100
     rs_glob_acc, avg_client_acc, avg_modality_acc = [], 0, {}
+    label_ratio = args.label_ratio
     
     if dataset == 'opp':
         rep_size = 10
@@ -87,112 +88,129 @@ def main(dataset, algorithm, model, batch_size, learning_rate, num_glob_iters,
                              modalities=client_modalities_list, rep_size=rep_size, n_classes=n_classes,
                              batch_size=batch_size, learning_rate=learning_rate, beta=1.0, lamda=0.0,
                              num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,
-                             num_users=num_users, times=times, pfl=pfl, args=args)
+                             num_users=num_users, times=times, pfl=pfl, label_ratio=label_ratio,args=args)
 
         if algorithm.lower() == "fedavg":
             server = FedAvg(dataset, algorithm, input_sizes=input_sizes,
                             modalities=client_modalities_list, rep_size=rep_size, n_classes=n_classes,
                             batch_size=batch_size, learning_rate=learning_rate, beta=1.0, lamda=0.0,
-                            num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,
+                            num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,label_ratio=label_ratio,
                             num_users=num_users, times=times, pfl=pfl)
 
         if algorithm.lower() == "fedprox":
             server = FedProx(dataset, algorithm, input_sizes=input_sizes,
                              modalities=client_modalities_list, rep_size=rep_size, n_classes=n_classes,
                              batch_size=batch_size, learning_rate=learning_rate, beta=1.0, lamda=0.0,
-                             num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,
+                             num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,label_ratio=label_ratio,
                              num_users=num_users, times=times, pfl=pfl)
 
         if algorithm.lower() == "fedcent":
             server = FedCent(dataset, algorithm, input_sizes=input_sizes,
                              modalities=client_modalities_list, rep_size=rep_size, n_classes=n_classes,
                              batch_size=batch_size, learning_rate=learning_rate, beta=1.0, lamda=0.0,
-                             num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,
+                             num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,label_ratio=label_ratio,
                              num_users=num_users, times=times, pfl=pfl)
 
         if algorithm.lower() == "fedcream":
             server = FedCream(dataset, algorithm, input_sizes=input_sizes,
                               modalities=client_modalities_list, rep_size=rep_size, n_classes=n_classes,
                               batch_size=batch_size, learning_rate=learning_rate, beta=1.0, lamda=0.0,
-                              num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,
+                              num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,label_ratio=label_ratio,
                               num_users=num_users, times=times, pfl=pfl)
 
         if algorithm.lower() == "fedproto":
             server = FedProto(dataset, algorithm, input_sizes=input_sizes,
                               modalities=client_modalities_list, rep_size=rep_size, n_classes=n_classes,
                               batch_size=batch_size, learning_rate=learning_rate, beta=1.0, lamda=0.0,
-                              num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,
+                              num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,label_ratio=label_ratio,
                               num_users=num_users, times=times, pfl=pfl)
 
         if algorithm.lower() == "fedmekt":
             server = FedMEKT(dataset, algorithm, input_sizes=input_sizes,
                              modalities=client_modalities_list, rep_size=rep_size, n_classes=n_classes,
                              batch_size=batch_size, learning_rate=learning_rate, beta=1.0, lamda=0.0,
-                             num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,
+                             num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,label_ratio=label_ratio,
                              num_users=num_users, times=times, pfl=pfl)
 
         if algorithm.lower() == "feddf":
             server = FedDF(dataset, algorithm, input_sizes=input_sizes,
                            modalities=client_modalities_list, rep_size=rep_size, n_classes=n_classes,
                            batch_size=batch_size, learning_rate=learning_rate, beta=1.0, lamda=0.0,
-                           num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,
+                           num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,label_ratio=label_ratio,
                            num_users=num_users, times=times, pfl=pfl)
 
         if algorithm.lower() == "fedab":
             server = FedNoDis(dataset, algorithm, input_sizes=input_sizes,
-                              modalities=client_modalities_list, rep_size=rep_size, n_classes=n_classes,
+                              modalities=client_modalities_list, rep_size=rep_size*2, n_classes=n_classes,
                               batch_size=batch_size, learning_rate=learning_rate, beta=1.0, lamda=0.0,
-                              num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,
+                              num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,label_ratio=label_ratio,
                               num_users=num_users, times=times, pfl=pfl,args=args)
 
         if algorithm.lower() == "fedpropgen":
             server = FedPropGen(dataset, algorithm, input_sizes=input_sizes,
                                 modalities=client_modalities_list, rep_size=rep_size, n_classes=n_classes,
                                 batch_size=batch_size, learning_rate=learning_rate, beta=1.0, lamda=0.0,
-                                num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,
+                                num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,label_ratio=label_ratio,
                                 num_users=num_users, times=times, pfl=pfl)
 
         if algorithm.lower() == "feddtg":
             server = FedDTG(dataset, algorithm, input_sizes=input_sizes,
                             modalities=client_modalities_list, rep_size=rep_size, n_classes=n_classes,
                             batch_size=batch_size, learning_rate=learning_rate, beta=1.0, lamda=0.0,
-                            num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,
+                            num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,label_ratio=label_ratio,
                             num_users=num_users, times=times, pfl=pfl)
+            
+        if algorithm.lower() == "fedgao":
+            server = FedGao(dataset, algorithm, input_sizes=input_sizes,
+                            modalities=client_modalities_list, rep_size=rep_size, n_classes=n_classes,
+                            batch_size=batch_size, learning_rate=learning_rate, beta=1.0, lamda=0.0,
+                            num_glob_iters=num_glob_iters, local_epochs=local_epochs, optimizer=optimizer,label_ratio=label_ratio,
+                            num_users=num_users, times=times, pfl=pfl, args=args)
 
         server.reset()
         
         
-        if algorithm.lower() == "fedprop" and args.ablation:
+        if (algorithm.lower() == "fedprop" or algorithm.lower() == "fedab") and (args.ablation or args.manual):
             rs_glob_acc, avg_client_acc, avg_modality_acc = server.train()
             
-            # === 保存逻辑 (完美复刻 ablation.py) ===
+            save_dir = ""
+            save_name = ""
+
+            # --- 分支 1: 消融实验模式 (优先) ---
             if args.ablation_name:
                 scheme_name = args.ablation_name
-                
-                # 1. 路径映射字典
                 dir_dict = {
                     "ab": "ablation",
                     "dist": "hyper_dist",
                     "align": "hyper_align"
                 }
-                # 获取输出文件夹名
                 out_dir = dir_dict.get(args.exp_type, "ablation")
                 
-                # 2. 拼接路径 (考虑 pfl)
                 if pfl:
                     save_dir = f"./results/pfl/{out_dir}"
                 else:
                     save_dir = f"./results/{out_dir}"
                 
-                os.makedirs(save_dir, exist_ok=True)
-                
-                # 3. 构造文件名
-                # 原代码：scheme.replace(" ", "_")，虽然这里一般没空格，保留逻辑
                 safe_scheme_name = scheme_name.replace(" ", "_")
-                save_path = os.path.join(save_dir, f"{dataset}_{safe_scheme_name}_ab.json")
+                save_name = f"{dataset}_{safe_scheme_name}_ab.json"
+
+            # --- 分支 2: 手动模式 (当没有 ablation_name 但有 manual 标志时) ---
+            elif args.manual:
+                if pfl:
+                    save_dir = "./results/pfl/manual"
+                else:
+                    save_dir = "./results/manual"
+                
+                # 按你的要求命名: fedprop_{args.manual}_ab.json
+                save_name = f"fedprop_{args.manual}_ab.json"
+
+            # --- 执行保存 ---
+            if save_dir and save_name:
+                os.makedirs(save_dir, exist_ok=True)
+                save_path = os.path.join(save_dir, save_name)
                 
                 record = {
-                    "scheme": scheme_name,
+                    "scheme": args.ablation_name if args.ablation_name else f"manual_{args.manual}",
                     "dataset": dataset,
                     "server_acc_curve": rs_glob_acc,
                     "client_avg_acc": avg_client_acc,
@@ -201,9 +219,10 @@ def main(dataset, algorithm, model, batch_size, learning_rate, num_glob_iters,
                 
                 with open(save_path, "w") as f:
                     json.dump(record, f, indent=4)
-                print(f"[Saved] Ablation JSON => {save_path}")
+                print(f"[Saved] Result JSON => {save_path}")
 
         else:
+            # 普通训练模式 (不存特定JSON)
             server.train()
         
     return rs_glob_acc, avg_client_acc, avg_modality_acc
@@ -225,23 +244,25 @@ if __name__ == "__main__":
     parser.add_argument("--learning_rate", type=float, default=0.001, help="Local learning rate")
     parser.add_argument("--num_global_iters", type=int, default=100)
     parser.add_argument("--local_epochs", type=int, default=2)
-    parser.add_argument("--optimizer", type=str, default="SGD")
+    parser.add_argument("--optimizer", type=str, default="Adam")
     parser.add_argument("--algo", type=str, default="FedProp")
     parser.add_argument("--numusers", type=float, default=0.5, help="Number of Users per round")
     parser.add_argument("--times", type=int, default=1, help="running time")
     parser.add_argument("--global_rounds", type=int, default=100, help="Number of global rounds")
+    parser.add_argument("--label_ratio", type=float, default=0.1, help="")
     parser.add_argument("--pfl", default=False, action='store_true')
     
     # === 【新增】消融实验专用参数 (以前你是硬编码的，现在要暴露出来) ===
-    parser.add_argument("--server_dist_weight", type=float, default=0.5)
+    parser.add_argument("--server_dist_weight", type=float, default=0.1)
     parser.add_argument("--server_align_weight", type=float, default=0.0)
     parser.add_argument("--client_orth_weight", type=float, default=0.1)
-    parser.add_argument("--client_align_weight", type=float, default=1.0)
+    parser.add_argument("--client_align_weight", type=float, default=0.7)
     parser.add_argument("--client_reg_weight", type=float, default=0.01)
     parser.add_argument("--client_logits_weight", type=float, default=0.5)
     
     # === 【新增】用于标记这次运行是不是消融，以及消融的名字 ===
     parser.add_argument("--ablation_name", type=str, default="", help="If set, saves to ablation folder")
+    parser.add_argument("--manual", type=str, default="", help="If set, ab name")
     parser.add_argument("--exp_type", type=str, default="ab", choices=["ab", "dist", "align"])
     
     args = parser.parse_args()
@@ -258,22 +279,19 @@ if __name__ == "__main__":
     print("Local Model       : {}".format(args.model))
     print("=" * 80)
 
-    client_modalities_dict = {
-        "mhealth": [10, 10, 10],
-        "opp": [15, 15],
-        "ur_fall": [10, 10, 10]
-    }
     # client_modalities_dict = {
-    #     "mhealth": [5, 5, 5],
-    #     "opp": [5, 5],
-    #     "ur_fall": [5, 5, 5],
-    #     "uci_har": [5, 5],
-    #     "hapt": [5, 5],
-    #     "pamap2": [5, 5, 5]
+    #     "mhealth": [10, 10, 10],
+    #     "opp": [15, 15],
+    #     "ur_fall": [10, 10, 10]
     # }
+    client_modalities_dict = {
+        "mhealth": [5, 5, 5],
+        "opp": [5, 5],
+        "ur_fall": [5, 5, 5],
+    }
 
     # === 【逻辑修改】根据是否传入 ablation_name 来设置 args.ablation ===
-    if args.ablation_name:
+    if args.ablation_name or args.manual:
         args.ablation = True # 开启消融模式逻辑
     else:
         args.ablation = False

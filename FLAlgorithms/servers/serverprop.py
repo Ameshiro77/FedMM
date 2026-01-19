@@ -430,7 +430,7 @@ class FedProp(Server):
             self.rs_glob_f1.append(f1)
 
         if self.args.ablation:
-            client_accs, avg_client_acc, avg_modality_acc = self.test_clients()
+            client_accs, avg_client_acc, avg_modality_acc = self.test_clients(save=False)
             return self.rs_glob_acc, avg_client_acc, avg_modality_acc
 
         else:

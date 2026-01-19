@@ -4,179 +4,170 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from FLAlgorithms.users.userbase import User
-from utils.model_utils import *
+from utils.model_utils import make_seq_batch2
 
 class UserGao(User):
     def __init__(self, client_id, train_data, test_data, public_data, ae_model, cf_model,
-                 modalities, batch_size=32, learning_rate=1e-3, beta=1.0, lamda=0.0, 
-                 local_epochs=1, label_ratio=0.1):
-        
+                 modalities, batch_size, learning_rate, beta, lamda, local_epochs, label_ratio, args):
         super().__init__(client_id, train_data, test_data, public_data, ae_model, cf_model,
                          modalities, batch_size, learning_rate, beta, lamda, local_epochs, label_ratio)
+        
+        self.conf_threshold = getattr(args, 'conf_thresh', 0.8) 
+        self.unc_threshold = getattr(args, 'unc_thresh', 0.1)   
+        self.args = args
+        
+        # === 改造：本地历史模型池 ===
+        self.history_pool = [] 
+        self.max_history_size = 2 # 存过去 2 个模型即可，多了显存爆炸且没必要
 
-        # 确保 modalities 是列表
-        if not isinstance(self.modalities, list):
-            self.modalities = [self.modalities]
-
-        # 优化器：分开定义
-        # 1. 仅优化 AE (用于 Phase 1: Unsupervised)
-        self.optimizer_ae = torch.optim.Adam(self.ae_model.parameters(), lr=self.learning_rate)
+    def update_history_pool(self):
+        """ 将当前模型状态存入历史池 """
+        # 深拷贝当前状态
+        current_state = {
+            'ae': copy.deepcopy(self.ae_model.state_dict()),
+            'cf': copy.deepcopy(self.cf_model.state_dict())
+        }
         
-        # 2. 同时优化 AE + CF (用于 Phase 3: Personalization)
-        # 论文中微调通常使用较小的学习率，这里设为 0.001 或更小
-        self.optimizer_total = torch.optim.Adam(
-            list(self.ae_model.parameters()) + list(self.cf_model.parameters()),
-            lr=self.learning_rate * 0.1 
-        )
-        
-        self.rec_loss_fn = nn.MSELoss()
-        self.cls_loss_fn = nn.CrossEntropyLoss()
-        
-        # [cite_start]伪标签阈值 (论文公式 1 中的 gamma [cite: 132])
-        self.conf_threshold = 0.8 
+        self.history_pool.append(current_state)
+        # 保持池子大小
+        if len(self.history_pool) > self.max_history_size:
+            self.history_pool.pop(0) # 移除最旧的
 
     def train_ae(self):
-        """
-        [Phase 1] 纯无监督自编码器训练：
-        利用本地无标签数据，优化 AE 的重构能力。
-        """
+        """ 阶段1: 无监督重构 (不变) """
         self.ae_model.train()
-        self.cf_model.eval() 
-        
-        epoch_loss = []
-        
-        for ep in range(self.local_epochs):
-            # 获取本地数据 (假设全部无标签)
-            modalities_seq, _ = make_seq_batch2(self.train_data, self.batch_size)
-            X_local = {m: modalities_seq[m] for m in self.modalities}
-            
-            # 获取序列长度
-            first_modal = self.modalities[0]
-            seq_len = X_local[first_modal].shape[1]
+        self.cf_model.eval()
+        rec_loss_lst = []
 
+        for _ in range(self.local_epochs):
+            modalities_seq, _ = make_seq_batch2(self.unlabeled_data, self.batch_size)
+            X_modal = {m: modalities_seq[m] for m in self.modalities}
+            seq_len = X_modal[self.modalities[0]].shape[1]
+            
             idx_end = 0
             while idx_end < seq_len:
-                # 随机滑窗
+                win_len = np.random.randint(16, 32)
+                idx_start = idx_end
+                idx_end = min(idx_end + win_len, seq_len)
+
+                self.optimizer_ae.zero_grad()
+                rec_loss = 0.0
+
+                for m in self.modalities:
+                    x_m = torch.from_numpy(X_modal[m][:, idx_start:idx_end, :]).to(self.device)
+                    recon = self.ae_model(x_m, m)
+                    rec_loss += self.rec_loss_fn(recon, x_m)
+
+                rec_loss.backward()
+                self.optimizer_ae.step()
+                rec_loss_lst.append(rec_loss.item())
+
+        return np.mean(rec_loss_lst)
+
+    def personalize(self):
+        """ 
+        阶段2: 改造版个性化 (Temporal Self-Ensembling) 
+        不需要外部传入模型，完全依赖本地历史 + 当前全局
+        """
+        # 如果没有历史模型 (第一轮)，先存一个然后跳过，或者直接基于置信度训练
+        if not self.history_pool:
+            self.update_history_pool()
+            return
+
+        self.ae_model.train()
+        self.cf_model.train()
+        
+        for _ in range(self.local_epochs):
+            modalities_seq, _ = make_seq_batch2(self.unlabeled_data, self.batch_size)
+            X_modal = {m: modalities_seq[m] for m in self.modalities}
+            seq_len = X_modal[self.modalities[0]].shape[1]
+            
+            idx_end = 0
+            while idx_end < seq_len:
                 win_len = np.random.randint(16, 32)
                 idx_start = idx_end
                 idx_end = min(idx_end + win_len, seq_len)
                 
+                # 准备 Batch
+                batch_x = {}
+                for m in self.modalities:
+                    batch_x[m] = torch.from_numpy(X_modal[m][:, idx_start:idx_end, :]).to(self.device)
+
+                # =========================================================
+                # 步骤 1: 生成伪标签 (利用当前模型 + 历史模型)
+                # =========================================================
+                with torch.no_grad():
+                    # 1. 当前模型预测 [B, T, C]
+                    curr_probs = self._get_probs(self.ae_model, self.cf_model, batch_x)
+                    
+                    # 2. 历史模型预测 (Auxiliary)
+                    history_probs_list = []
+                    
+                    # 备份当前参数
+                    temp_ae_state = copy.deepcopy(self.ae_model.state_dict())
+                    temp_cf_state = copy.deepcopy(self.cf_model.state_dict())
+                    
+                    # 遍历本地历史池
+                    for state in self.history_pool:
+                        self.ae_model.load_state_dict(state['ae'])
+                        self.cf_model.load_state_dict(state['cf'])
+                        self.ae_model.eval(); self.cf_model.eval()
+                        
+                        prob = self._get_probs(self.ae_model, self.cf_model, batch_x)
+                        history_probs_list.append(prob)
+                    
+                    # 恢复参数进行训练
+                    self.ae_model.load_state_dict(temp_ae_state)
+                    self.cf_model.load_state_dict(temp_cf_state)
+                    self.ae_model.train(); self.cf_model.train()
+                    
+                    # 3. 计算不确定性 (Uncertainty)
+                    # Ensemble = Current + History
+                    all_probs = torch.stack([curr_probs] + history_probs_list) # [N+1, B, T, C]
+                    std_probs = torch.std(all_probs, dim=0) # [B, T, C]
+                    
+                    # 获取当前预测 (Pseudo Label)
+                    max_probs, pseudo_labels = torch.max(curr_probs, dim=-1) # [B, T]
+                    
+                    # 获取对应类别的 Uncertianty
+                    uncertainty = torch.gather(std_probs, -1, pseudo_labels.unsqueeze(-1)).squeeze(-1) # [B, T]
+                    
+                    # 4. 生成掩码 (Filter)
+                    mask = (max_probs >= self.conf_threshold) & (uncertainty <= self.unc_threshold)
+                    
+                # =========================================================
+                # 步骤 2: 微调
+                # =========================================================
+                if mask.sum() == 0:
+                    continue
+                
                 self.optimizer_ae.zero_grad()
-                total_loss = 0.0
+                self.optimizer_cf.zero_grad()
                 
-                # 对每个模态计算重构损失
+                latents = []
                 for m in self.modalities:
-                    x_seg = torch.from_numpy(X_local[m][:, idx_start:idx_end, :]).float().to(self.device)
-                    
-                    # SplitLSTMAutoEncoder forward 返回的是 x_recon
-                    x_recon = self.ae_model(x_seg, m)
-                    
-                    # MSE Loss
-                    loss = self.rec_loss_fn(x_recon, x_seg)
-                    total_loss += loss
+                    _, z = self.ae_model.encode(batch_x[m], m) 
+                    latents.append(z)
+                logits = self.cf_model(torch.cat(latents, dim=-1))
                 
-                total_loss.backward()
-                self.optimizer_ae.step()
-                epoch_loss.append(total_loss.item())
+                logits_flat = logits.reshape(-1, logits.size(-1))
+                labels_flat = pseudo_labels.reshape(-1)
+                mask_flat = mask.reshape(-1).float()
                 
-        return np.mean(epoch_loss) if len(epoch_loss) > 0 else 0.0
-
-    def train_personalization(self):
-        """
-        [Phase 3] 基于伪标签的个性化微调：
-        先生成伪标签，筛选高置信度样本，再进行有监督微调。
-        """
-        # === Step 1: 生成伪标签 (Pseudo-labeling) ===
-        self.ae_model.eval()
-        self.cf_model.eval()
-        
-        # 获取所有本地数据用于打标
-        # 注意：为了代码简单，这里直接一次性取全量数据（如果显存不够，需要分批处理）
-        # 假设 self.train_data['y'] 长度即样本数
-        total_samples = len(self.train_data['y'])
-        full_seq, _ = make_seq_batch2(self.train_data, total_samples) # batch_size = total
-        
-        X_full = {m: torch.from_numpy(full_seq[m]).float().to(self.device) for m in self.modalities}
-        
-        pseudo_labels_dict = {} # 存储 (batch_idx, time_idx) -> label
-        valid_indices = []      # 存储高置信度的索引位置
-        
-        with torch.no_grad():
-            # 滑窗遍历整个长序列进行预测
-            # 为了效率，这里使用较大的固定窗口步进
-            step_size = 32
-            seq_len_total = X_full[self.modalities[0]].shape[1]
-            
-            for t in range(0, seq_len_total - step_size, step_size):
-                reps_list = []
-                for m in self.modalities:
-                    x_seg = X_full[m][:, t:t+step_size, :] # [B, Win, D]
-                    # 提取特征
-                    _, out = self.ae_model.encoders[m](x_seg)
-                    reps_list.append(out[:, -1, :]) # [B, Rep]
+                loss_raw = F.cross_entropy(logits_flat, labels_flat, reduction='none')
+                loss = (loss_raw * mask_flat).sum() / (mask_flat.sum() + 1e-8)
                 
-                rep_cat = torch.cat(reps_list, dim=-1)
-                logits = self.cf_model(rep_cat)
-                probs = F.softmax(logits, dim=1)
-                max_probs, preds = torch.max(probs, dim=1) # [B]
-                
-                # 筛选
-                mask = max_probs > self.conf_threshold
-                
-                # 记录有效的样本信息
-                # 这里简单处理：我们将在下面的训练循环中重新计算并应用mask，
-                # 为了保持 consistency，这里只是验证是否有样本可用
-                if mask.sum() > 0:
-                    valid_indices.append(t)
-
-        if len(valid_indices) == 0:
-            return 0.0 # 没有样本满足置信度，跳过微调
-
-        # === Step 2: 使用伪标签进行微调 ===
-        self.ae_model.train()
-        self.cf_model.train()
-        epoch_loss = []
-        
-        # 重新分 Batch 训练
-        batch_size = self.batch_size
-        # 这里使用标准的随机滑窗训练逻辑，但在计算 Loss 时应用 Mask
-        
-        # 重新获取数据流
-        modalities_seq, _ = make_seq_batch2(self.train_data, self.batch_size)
-        X_local = {m: modalities_seq[m] for m in self.modalities}
-        seq_len = X_local[self.modalities[0]].shape[1]
-        
-        idx_end = 0
-        while idx_end < seq_len:
-            win_len = np.random.randint(16, 32)
-            idx_start = idx_end
-            idx_end = min(idx_end + win_len, seq_len)
-            
-            self.optimizer_total.zero_grad()
-            
-            # Forward
-            reps_list = []
-            for m in self.modalities:
-                x_seg = torch.from_numpy(X_local[m][:, idx_start:idx_end, :]).float().to(self.device)
-                _, out = self.ae_model.encoders[m](x_seg)
-                reps_list.append(out[:, -1, :])
-            
-            rep_cat = torch.cat(reps_list, dim=-1)
-            logits = self.cf_model(rep_cat)
-            
-            # 在线计算伪标签 (On-the-fly Pseudo-labeling)
-            # 这种方式比预先计算更节省内存，且利用了最新梯度
-            with torch.no_grad():
-                probs = F.softmax(logits, dim=1)
-                max_probs, pseudo_labels = torch.max(probs, dim=1)
-                # 再次应用阈值
-                batch_mask = max_probs > self.conf_threshold
-            
-            if batch_mask.sum() > 0:
-                # 只计算高置信度样本的 CrossEntropy
-                loss = self.cls_loss_fn(logits[batch_mask], pseudo_labels[batch_mask])
                 loss.backward()
-                self.optimizer_total.step()
-                epoch_loss.append(loss.item())
-            
-        return np.mean(epoch_loss) if len(epoch_loss) > 0 else 0.0
+                self.optimizer_ae.step()
+                self.optimizer_cf.step()
+        
+        # 个性化结束后，将当前更强的模型加入历史池，供下一轮使用
+        self.update_history_pool()
+
+    def _get_probs(self, ae, cf, x_dict):
+        latents = []
+        for m in self.modalities:
+            _, z = ae.encode(x_dict[m], m) 
+            latents.append(z)
+        logits = cf(torch.cat(latents, dim=-1))
+        return F.softmax(logits, dim=-1)

@@ -63,7 +63,7 @@ class FedProx(Server):
             self.aggregate_parameters()
             self.send_ae_parameters()
 
-            for user in self.users:
+            for user in self.selected_users:
                 user.train_cf()
 
             # self.train()

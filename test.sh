@@ -9,7 +9,8 @@
 #     --global_rounds 100 \
 #     --local_epochs 2 \
 #     --numusers 0.5 \
-#     --algo fedprop
+#     --algo fedgao \
+    # --pfl
 
 # python main.py \
 #     --dataset opp \
@@ -17,7 +18,7 @@
 #     --local_epochs 2 \
 #     --numusers 0.5 \
 #     --optimizer Adam \
-#     --algo fedprop \
+#     --algo fedgao \
 #     --pfl
 
 python main.py \
@@ -26,5 +27,11 @@ python main.py \
     --local_epochs 2 \
     --numusers 0.5 \
     --optimizer Adam \
-    --algo fedab \
+    --algo fedprop \
+    --server_dist_weight 0.1 \
+    --server_align_weight 0.00 \
+    --client_orth_weight 0.1 \
+    --client_align_weight 0.7 \
+    --client_reg_weight 0.01 \
+    --client_logits_weight 0.5 \
     --pfl

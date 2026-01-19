@@ -19,15 +19,7 @@ datasets_modalities = {
 }
 
 # [核心配置] 文件名(Key) -> 显示名称(Value)
-file_method_map = {
-    "fedprop":   "FedProp",
-    "fedcent":   "Single",
-    "fedavg":    "FedAvg",
-    "fedprox":   "FedProx",
-    "fedproto":  "FedProto",
-    "fedmekt":   "FedMEKT",
-    "feddtg":    "FedDTG",
-}
+from plot import  file_method_map
 
 # [颜色配置]
 method_colors = {

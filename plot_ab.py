@@ -38,13 +38,6 @@ def load_experiment_results(dataset, exp_type="ablation", pfl=False):
 
     return results, base_dir
 
-import os
-import json
-import glob
-import argparse
-import matplotlib.pyplot as plt
-import numpy as np
-import math
 
 # ================= 全局字体设置 =================
 # 为了让 LaTeX 公式和整体图表看起来更像论文出版级
@@ -60,6 +53,93 @@ plt.rcParams['axes.unicode_minus'] = False
 # ... (plot_server_acc 函数保持不变，此处省略) ...
 # ... (save_ablation_table 函数保持不变，此处省略) ...
 
+def plot_hyper_dist_line_chart(dataset, dist_results, save_dir):
+    """
+    【新函数】绘制超参数对比折线图 (横坐标: 参数值, 纵坐标: 精度)
+    替代原来的雷达图，展示 lambda_dist 对 Server/Client 准确率的影响。
+    """
+    # === 1. 数据提取与解析 ===
+    param_values = []
+    server_accs = []
+    client_accs = []
+
+    # 按文件名排序，确保折线顺序正确
+    sorted_keys = sorted(dist_results.keys())
+
+    for key in sorted_keys:
+        rec = dist_results[key]
+        # 获取最终精度
+        s_acc = rec["server_acc_curve"][-1] if rec["server_acc_curve"] else 0.0
+        c_acc = rec.get("client_avg_acc", 0.0)
+        
+        # 从 key 中提取参数值 (假设 key 格式类似 "dataset_fedprop_serverdist_0.1")
+        # 您之前的逻辑是: value_str = key.replace(...).replace(...)
+        # 这里为了稳健，尝试提取数字，如果提取不到则保留原字符串
+        try:
+            # 尝试提取浮点数
+            val_str = key.replace(f"{dataset}_", "").replace("fedprop_serverdist_", "").replace(".json", "")
+            val = float(val_str)
+        except ValueError:
+            val = 0.0 # 兜底，或根据实际情况调整
+            
+        param_values.append(val)
+        server_accs.append(s_acc)
+        client_accs.append(c_acc)
+
+    # === 2. 绘图设置 ===
+    plt.figure(figsize=(8, 6)) # 调整为适合折线图的比例
+
+    # 字体设置 (沿用您之前的逻辑)
+    font_path = 'times.ttf'
+    try:
+        my_font = fm.FontProperties(fname=font_path, size=18)
+    except:
+        my_font = fm.FontProperties(size=18)
+    
+    plt.rcParams['mathtext.fontset'] = 'stix'
+    
+    # === 3. 绘制两条折线 ===
+    # Line 1: Server Accuracy
+    plt.plot(param_values, server_accs, 
+             color='#1f77b4',       # 蓝色
+             marker='o',            # 圆点标记
+             markersize=8,          # 标记大小
+             linewidth=2.5,         # 线宽
+             linestyle='-',         # 实线
+             label='Server Accuracy')
+
+    # Line 2: Client Average Accuracy
+    plt.plot(param_values, client_accs, 
+             color='#ff7f0e',       # 橙色
+             marker='s',            # 方块标记
+             markersize=8, 
+             linewidth=2.5, 
+             linestyle='--',        # 虚线
+             label='Avg. Client Accuracy')
+
+    # === 4. 坐标轴与标签 ===
+    plt.xlabel(r"Hyperparameter $\lambda^S_{dist}$", fontproperties=my_font)
+    plt.ylabel("Accuracy", fontproperties=my_font)
+    
+    # 设置刻度字体
+    ax = plt.gca()
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+        label.set_fontproperties(my_font)
+        
+    # 如果横坐标是离散的特定值，强制显示这些刻度
+    plt.xticks(param_values, [str(v) for v in param_values])
+
+    # === 5. 图例与网格 ===
+    plt.legend(prop=my_font, loc='best', frameon=True, edgecolor='gray')
+    plt.grid(True, linestyle='--', alpha=0.5)
+
+    # 保存
+    save_path = os.path.join(save_dir, f"{dataset}_dist_line.pdf")
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+
+    print(f"[Saved] Hyperparam Line Chart => {save_path}")
 
 def plot_radar_chart(dataset, dist_results, save_dir):
     """
@@ -300,7 +380,7 @@ def run_one(dataset, exp_type, pfl):
     if exp_type == "hyper_dist":
         # === 新增逻辑：画雷达图 ===
         print(f"正在为 {exp_type} 生成雷达图...")
-        plot_radar_chart(
+        plot_hyper_dist_line_chart(
             dataset=dataset,
             dist_results=results,
             save_dir=save_dir
@@ -330,15 +410,15 @@ def main():
     args = parser.parse_args()
 
     for exp_type in ["ablation", "hyper_dist", "hyper_align"]:
-        # ===== non-PFL =====
-        try:
-            run_one(
-                dataset=args.dataset,
-                exp_type=exp_type,
-                pfl=False
-            )
-        except FileNotFoundError as e:
-            print(f"[Skip] {exp_type} (non-PFL): {e}")
+        # # ===== non-PFL =====
+        # try:
+        #     run_one(
+        #         dataset=args.dataset,
+        #         exp_type=exp_type,
+        #         pfl=False
+        #     )
+        # except FileNotFoundError as e:
+        #     print(f"[Skip] {exp_type} (non-PFL): {e}")
 
         # ===== PFL =====
         try:

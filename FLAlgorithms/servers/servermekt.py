@@ -38,13 +38,13 @@ class FedMEKT(Server):
                 user = UserMEKT(
                 i, self.clients_train_data_list[i], self.clients_test_data_list[i], self.public_data, 
                 client_ae, client_cf, client_modals, batch_size, learning_rate,
-                beta, lamda, local_epochs
+                beta, lamda, local_epochs,label_ratio
             )
             else:
                 user = UserMEKT(
                     i, self.clients_train_data_list[i], self.test_data, self.public_data, 
                     client_ae, client_cf, client_modals, batch_size, learning_rate,
-                    beta, lamda, local_epochs
+                    beta, lamda, local_epochs,label_ratio
                 )
             self.users.append(user)
         

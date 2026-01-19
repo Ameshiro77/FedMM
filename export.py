@@ -10,17 +10,7 @@ datasets_modalities = {
 }
 
 # 文件名(Key) -> 显示名称(Value)
-file_method_map = {
-    "fedcent":  "Single",
-    "fedavg":   "FedAvg",
-    "fedprox":  "FedProx",
-    "fedproto": "FedProto",
-    # "fedab":    "FedAB",
-    # "fedpropgen": "FedPropGEN",
-    "feddtg":   "FedDTG",
-    "fedmekt":  "FedMEKT",
-    "fedprop":  "FedProp",
-}
+from plot import  file_method_map
 
 def load_data(dataset, file_prefix, results_dir):
     """

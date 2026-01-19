@@ -244,9 +244,49 @@ class FedNoDis(Server):
             self.rs_train_loss.append(loss)
             self.rs_glob_acc.append(acc)
             self.rs_glob_f1.append(f1)
-        accs = self.test_clients()
-        print("Test accuracy: ", accs)
-        self.save_results()
+            
+        if self.args.ablation:
+            client_accs, avg_client_acc, avg_modality_acc = self.test_clients(save=False)
+            print("Test accuracy: ", avg_client_acc)
+            return self.rs_glob_acc, avg_client_acc, avg_modality_acc
+
+
+        else:
+            if self.pfl:
+                save_dir = f"./results/pfl/{self.dataset}/"
+            else:
+                save_dir = f"./results/{self.dataset}/"
+            os.makedirs(save_dir, exist_ok=True)
+            
+            save_path = os.path.join(save_dir, "loss_server.json")
+
+            # 收集所有客户端的 Loss (遍历 self.users 而不是 self.selected_users 以获取完整历史)
+            client_loss_all = {}
+            for user in self.users:
+                if hasattr(user, 'loss_history'):
+                    client_loss_all[user.client_id] = {
+                        "ae_loss": user.loss_history,
+                        "cf_loss": getattr(user, 'cf_loss_history', {})
+                    }
+            
+            all_losses = {
+                "global_losses": self.loss_history,       # AE 与 CF 全局平均损失
+                "global_train_loss": self.rs_train_loss,  # server test loss
+                "global_acc": self.rs_glob_acc,
+                "global_f1": self.rs_glob_f1,
+                "client_losses": client_loss_all          # 每个客户端
+            }
+            
+            with open(save_path, "w") as f:
+                json.dump(all_losses, f, indent=4)
+            print(f"[Saved] Loss JSON => {save_path}")
+
+            client_accs, avg_client_acc, avg_modality_acc = self.test_clients()
+            self.save_results()
+            return None
+        # accs = self.test_clients()
+        # print("Test accuracy: ", accs)
+        # self.save_results()
 
     def test_server(self):
         self.ae_model_server.eval()
